@@ -66,6 +66,14 @@ using std::chrono::milliseconds;
     cudaEventElapsedTime(&ms, t1, t2); \
     __VA_ARGS__ \
     cudaMemcpy(memC, gpuC, BYTES_SIZE(float), cudaMemcpyDeviceToHost); \
+    /* Print first up to 10 elements of the result matrix for quick inspection */ \
+    { \
+        size_t total_elems = static_cast<size_t>(N) * static_cast<size_t>(N); \
+        size_t printCount = total_elems < 10 ? total_elems : 10; \
+        printf("%40s first %zu elements:", _name, printCount); \
+        for (size_t __i = 0; __i < printCount; ++__i) printf(" %f", memC[__i]); \
+        printf("\n"); \
+    } \
     cudaEventDestroy(t1); \
     cudaEventDestroy(t2); \
     printf("%40s time (ms): %10f\n", _name, ms); \
