@@ -74,6 +74,9 @@ using std::chrono::milliseconds;
         for (size_t __i = 0; __i < printCount; ++__i) printf(" %f", memC[__i]); \
         printf("\n"); \
     } \
+    /* Clear device result buffers so next run doesn't inherit previous values */ \
+    if (gpuC) cudaMemset(gpuC, 0, BYTES_SIZE(float)); \
+    if (gpuCPart) cudaMemset(gpuCPart, 0, BYTES_SIZE(float)); \
     cudaEventDestroy(t1); \
     cudaEventDestroy(t2); \
     printf("%40s time (ms): %10f\n", _name, ms); \
