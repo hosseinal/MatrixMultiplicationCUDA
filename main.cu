@@ -77,6 +77,24 @@ using std::chrono::milliseconds;
     /* Clear device result buffers so next run doesn't inherit previous values */ \
     if (gpuC) cudaMemset(gpuC, 0, BYTES_SIZE(float)); \
     if (gpuCPart) cudaMemset(gpuCPart, 0, BYTES_SIZE(float)); \
+    /* Copy back and print first elements after zeroing to verify clearing */ \
+    if (gpuC) { \
+        cudaMemcpy(memC, gpuC, BYTES_SIZE(float), cudaMemcpyDeviceToHost); \
+        size_t total_elems_after = static_cast<size_t>(N) * static_cast<size_t>(N); \
+        size_t printCountAfter = total_elems_after < 10 ? total_elems_after : 10; \
+        printf("%40s after zeroing gpuC first %zu elements:", _name, printCountAfter); \
+        for (size_t __j = 0; __j < printCountAfter; ++__j) printf(" %f", memC[__j]); \
+        printf("\n"); \
+    } \
+    if (gpuCPart) { \
+        /* reuse memC buffer to copy gpuCPart for inspection */ \
+        cudaMemcpy(memC, gpuCPart, BYTES_SIZE(float), cudaMemcpyDeviceToHost); \
+        size_t total_elems_afterp = static_cast<size_t>(N) * static_cast<size_t>(N); \
+        size_t printCountAfterp = total_elems_afterp < 10 ? total_elems_afterp : 10; \
+        printf("%40s after zeroing gpuCPart first %zu elements:", _name, printCountAfterp); \
+        for (size_t __k = 0; __k < printCountAfterp; ++__k) printf(" %f", memC[__k]); \
+        printf("\n"); \
+    } \
     cudaEventDestroy(t1); \
     cudaEventDestroy(t2); \
     printf("%40s time (ms): %10f\n", _name, ms); \
