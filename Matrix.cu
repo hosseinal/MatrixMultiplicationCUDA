@@ -17,6 +17,11 @@ Matrix::Matrix(const string &filename) {
     float v;
     freopen(filename.c_str(), "r", stdin);
 
+    if (f == NULL) {
+    perror("Error opening file");
+    return 1; // or handle the error
+    }
+
     std::cin >> rows >> cols;
     this->data = static_cast<half *>(malloc((rows * cols) * sizeof(half)));
 
