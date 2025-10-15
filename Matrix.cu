@@ -18,6 +18,8 @@ Matrix::Matrix(const string &filename) {
     freopen(filename.c_str(), "r", stdin);
 
     if (freopen(filename.c_str(), "r", stdin) == NULL) {
+    //print the file name and error
+    std::cerr << "Error opening file: " << filename << std::endl;
     perror("Error opening file");
     }
 
