@@ -17,7 +17,7 @@ Matrix::Matrix(const string &filename) {
     float v;
     freopen(filename.c_str(), "r", stdin);
 
-    if (f == NULL) {
+    if (freopen(filename.c_str(), "r", stdin) == NULL) {
     perror("Error opening file");
     return 1; // or handle the error
     }
