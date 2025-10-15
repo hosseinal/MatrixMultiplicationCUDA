@@ -1,9 +1,6 @@
 cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 
 # set host compiler
-set(CMAKE_CUDA_HOST_COMPILER "/usr/bin/gcc-11")
-set(CMAKE_C_COMPILER "/usr/bin/gcc-11")
-set(CMAKE_CXX_COMPILER "/usr/bin/g++-11")
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
