@@ -20,6 +20,6 @@ make -j8
 
 ./matrix_multiplication > ../matrix_multiplication_output.txt
 
-ncu --target-processes all --set full --benchmark_report_aggregates_only=true --benchmark_format=json -o ./profiling_matrix_multiplication ./matrix_multiplication > results_matrix_multiplication_with_profiling.json < /dev/null
+ncu --target-processes all --set full -o ./profiling_matrix_multiplication ./matrix_multiplication > results_matrix_multiplication_with_profiling.json < /dev/null
 
 
