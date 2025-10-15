@@ -19,7 +19,6 @@ Matrix::Matrix(const string &filename) {
 
     if (freopen(filename.c_str(), "r", stdin) == NULL) {
     perror("Error opening file");
-    return 1; // or handle the error
     }
 
     std::cin >> rows >> cols;
