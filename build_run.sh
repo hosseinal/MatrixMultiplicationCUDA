@@ -17,3 +17,9 @@ mkdir build
 cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j8
+
+./matrix_multiplication > ../matrix_multiplication_output.txt
+
+ncu --target-processes all --set full -o ./profiling_matrix_multiplication ./matrix_multiplication  --benchmark_report_aggregates_only=true --benchmark_format=json > results_matrix_multiplication_with_profiling.json
+
+
