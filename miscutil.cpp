@@ -33,13 +33,15 @@ bool checkMatrix(const float *A, const float *B, const unsigned int n) {
 }
 
 double rmse(const float *A, const float *B, const unsigned int n) {
-    double sum = 0.0f;
+    double sum = 0.0;
+    const size_t total = static_cast<size_t>(n) * static_cast<size_t>(n);
 
-    for (int i = 0; i < n * n; i++) {
-        sum += static_cast<double>(A[i] - B[i]) * static_cast<double>(A[i] - B[i]);
+    for (size_t i = 0; i < total; i++) {
+        const double diff = static_cast<double>(A[i]) - static_cast<double>(B[i]);
+        sum += diff * diff;
     }
 
-    return sqrt(sum / n);
+    return sqrt(sum / static_cast<double>(total));
 }
 
 float maxdiff(const float *A, const float *B, const unsigned int n) {
@@ -53,13 +55,22 @@ float maxdiff(const float *A, const float *B, const unsigned int n) {
 }
 
 float avgrelerr(const float *A, const float *B, const unsigned int n) {
-    double sum = 0.0f;
+    double sum = 0.0;
+    const size_t total = static_cast<size_t>(n) * static_cast<size_t>(n);
+    const double eps = 1e-12; // avoid division by zero
 
-    for (int i = 0; i < n * n; i++) {
-        sum += fabs(A[i] - B[i]) / B[i];
+    for (size_t i = 0; i < total; i++) {
+        const double denom = fabs(static_cast<double>(B[i]));
+        const double numer = fabs(static_cast<double>(A[i]) - static_cast<double>(B[i]));
+        if (denom > eps) {
+            sum += numer / denom;
+        } else {
+            // If B[i] is (near) zero fall back to absolute error
+            sum += numer;
+        }
     }
 
-    return sum / n;
+    return static_cast<float>(sum / static_cast<double>(total));
 }
 
 float blockDensity(const Matrix &matrix, int i, int j) {

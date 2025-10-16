@@ -2,6 +2,9 @@
 build/
 cmake-build-*/
 
+# Generated matrices
+matrices/
+
 # Prerequisites
 *.d
 

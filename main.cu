@@ -1,9 +1,12 @@
 #include <cassert>
 #include <iostream>
 #include <chrono>
+#include <sstream>
+#include <iomanip>
 #include <mma.h>
 #include <cublas_v2.h>
 #include <cusparse_v2.h>
+#include <algorithm>
 #include <cooperative_groups.h>
 #include <cuda/barrier>
 
@@ -18,6 +21,9 @@ constexpr unsigned int N_THREADS = 32;
 extern const int BLOCK_SIZE = 16;
 string MATRIX_A_PATH = "../medA.mat";
 string MATRIX_B_PATH = "../medB.mat";
+string MATRIX_PATTERN = "random";
+// sparsity extracted from filename (A_<size>_s<sp>.mat), default empty
+string MATRIX_SPARSITY = "";
 
 using namespace std;
 using namespace nvcuda;
@@ -52,7 +58,7 @@ using std::chrono::milliseconds;
                cudaMemcpyHostToDevice); \
     CHECK_CUDA_ERRORS("cudaMemcpy")
 #define PREPARE_FUNC(_name) \
-    cout << "Running " << _name << "\n"; \
+    /* silent prepare: initialize buffers and events (no console output) */ \
     memset(memC, 0, BYTES_SIZE(float)); \
     cudaMemset(gpuC, 0, BYTES_SIZE(float)); \
     cudaMemset(gpuCPart, 0, BYTES_SIZE(float)); \
@@ -66,41 +72,40 @@ using std::chrono::milliseconds;
     cudaEventElapsedTime(&ms, t1, t2); \
     __VA_ARGS__ \
     cudaMemcpy(memC, gpuC, BYTES_SIZE(float), cudaMemcpyDeviceToHost); \
-    /* Print first up to 10 elements of the result matrix for quick inspection */ \
-    { \
-        size_t total_elems = static_cast<size_t>(N) * static_cast<size_t>(N); \
-        size_t printCount = total_elems < 10 ? total_elems : 10; \
-        printf("%40s first %zu elements:", _name, printCount); \
-        for (size_t __i = 0; __i < printCount; ++__i) printf(" %f", memC[__i]); \
-        printf("\n"); \
-    } \
     /* Clear device result buffers so next run doesn't inherit previous values */ \
     if (gpuC) cudaMemset(gpuC, 0, BYTES_SIZE(float)); \
     if (gpuCPart) cudaMemset(gpuCPart, 0, BYTES_SIZE(float)); \
-    /* Copy back and print first elements after zeroing to verify clearing */ \
-    if (gpuC) { \
-        cudaMemcpy(memC, gpuC, BYTES_SIZE(float), cudaMemcpyDeviceToHost); \
-        size_t total_elems_after = static_cast<size_t>(N) * static_cast<size_t>(N); \
-        size_t printCountAfter = total_elems_after < 10 ? total_elems_after : 10; \
-        printf("%40s after zeroing gpuC first %zu elements:", _name, printCountAfter); \
-        for (size_t __j = 0; __j < printCountAfter; ++__j) printf(" %f", memC[__j]); \
-        printf("\n"); \
-    } \
-    if (gpuCPart) { \
-        /* reuse memC buffer to copy gpuCPart for inspection */ \
-        cudaMemcpy(memC, gpuCPart, BYTES_SIZE(float), cudaMemcpyDeviceToHost); \
-        size_t total_elems_afterp = static_cast<size_t>(N) * static_cast<size_t>(N); \
-        size_t printCountAfterp = total_elems_afterp < 10 ? total_elems_afterp : 10; \
-        printf("%40s after zeroing gpuCPart first %zu elements:", _name, printCountAfterp); \
-        for (size_t __k = 0; __k < printCountAfterp; ++__k) printf(" %f", memC[__k]); \
-        printf("\n"); \
-    } \
     cudaEventDestroy(t1); \
     cudaEventDestroy(t2); \
-    printf("%40s time (ms): %10f\n", _name, ms); \
-    printf("%45s rmse: %10lf\n", _name, rmse(memC, correctMatrix, N)); \
-    printf("%41s max diff: %10lf\n", _name, maxdiff(memC, correctMatrix, N)); \
-    printf("%27s average relative error: %10lf\n", _name, avgrelerr(memC, correctMatrix, N));
+    /* CSV: name,time(ms),diff(maxdiff),maxrelativeerr(avgrelerr),size,pattern,sparsity,matrixApath */ \
+    printf("%s,%f,%lf,%lf,%u,%s,%s,%s\n", _name, ms, maxdiff(memC, correctMatrix, N), avgrelerr(memC, correctMatrix, N), N, MATRIX_PATTERN.c_str(), MATRIX_SPARSITY.c_str(), MATRIX_A_PATH.c_str());
+
+// Run the provided call 20 times, collect timings, print median and metrics.
+#define RUN_20_AND_REPORT(_name, ...) do { \
+    float __r20_times[20]; \
+    for (int __r20_iter = 0; __r20_iter < 20; ++__r20_iter) { \
+        /* prepare buffers and timing events per iteration */ \
+        memset(memC, 0, BYTES_SIZE(float)); \
+        cudaMemset(gpuC, 0, BYTES_SIZE(float)); \
+        cudaMemset(gpuCPart, 0, BYTES_SIZE(float)); \
+        cudaEventCreate(&t1); cudaEventCreate(&t2); \
+        cudaEventRecord(t1, 0); \
+        __VA_ARGS__; \
+        cudaEventRecord(t2, 0); \
+        cudaEventSynchronize(t2); \
+        cudaEventElapsedTime(&ms, t1, t2); \
+        __r20_times[__r20_iter] = ms; \
+        cudaEventDestroy(t1); cudaEventDestroy(t2); \
+    } \
+    /* copy final result from device (from last iteration) */ \
+    cudaMemcpy(memC, gpuC, BYTES_SIZE(float), cudaMemcpyDeviceToHost); \
+    if (gpuC) cudaMemset(gpuC, 0, BYTES_SIZE(float)); \
+    if (gpuCPart) cudaMemset(gpuCPart, 0, BYTES_SIZE(float)); \
+    std::sort(__r20_times, __r20_times + 20); \
+    float __r20_median = __r20_times[10]; \
+    /* CSV: name,time(ms),diff(maxdiff),maxrelativeerr(avgrelerr),size,pattern,sparsity,matrixApath */ \
+    printf("%s,%f,%lf,%lf,%u,%s,%s,%s\n", _name, __r20_median, maxdiff(memC, correctMatrix, N), avgrelerr(memC, correctMatrix, N), N, MATRIX_PATTERN.c_str(), MATRIX_SPARSITY.c_str(), MATRIX_A_PATH.c_str()); \
+} while(0)
 
 /**
  * Dense matrix multiplication in CPU
@@ -340,18 +345,29 @@ __global__ void addMatrices(float *C, const float *CPart, const unsigned int n) 
 }
 
 int main(const int argc, const char **argv) {
-    if (argc == 3) {
-        MATRIX_A_PATH = argv[1];
-        MATRIX_B_PATH = argv[2];
-    }
+    if (argc >= 2) MATRIX_A_PATH = argv[1];
+    if (argc >= 3) MATRIX_B_PATH = argv[2];
+    if (argc >= 4) MATRIX_PATTERN = argv[3];
 
-    cout << "Reading matrix A...\n";
     const Matrix *matrixA = new Matrix(MATRIX_A_PATH);
-    cout << "Reading matrix B...\n";
     const Matrix *matrixB = new Matrix(MATRIX_B_PATH);
     assert(matrixA->rows && matrixA->cols && matrixB->rows && matrixB->cols);
     assert(matrixA->cols == matrixB->rows);
     N = matrixA->cols;
+
+    // compute true sparsity = nonZeros / (N*N) from matrixA
+    if (matrixA->rows > 0 && matrixA->cols > 0) {
+        double total = static_cast<double>(matrixA->rows) * static_cast<double>(matrixA->cols);
+        double sp = 0.0;
+        if (total > 0.0) sp = static_cast<double>(matrixA->nonZeros) / total;
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(4) << sp;
+        MATRIX_SPARSITY = oss.str();
+    }
+    // allow optional override: argv[4] can set printed sparsity (e.g. 0.35)
+    if (argc >= 5) {
+        MATRIX_SPARSITY = string(argv[4]);
+    }
 
     cublasHandle_t cublasHandle;
     constexpr float alpha = 1.0;
@@ -401,19 +417,14 @@ int main(const int argc, const char **argv) {
         1
     };
     blockSize = {N_THREADS * N_THREADS, 1, 1};
-    PREPARE_FUNC("Dense on GPU Coalescence");
-    denseMatrixMulCo<<<gridSize, blockSize>>>(gpuA_half, gpuB_half, gpuC, N);
-    END_FUNC("Dense on GPU Coalescence");
+    RUN_20_AND_REPORT("Dense on GPU Coalescence", denseMatrixMulCo<<<gridSize, blockSize>>>(gpuA_half, gpuB_half, gpuC, N));
     memcpy(correctMatrix, memC, N * N * sizeof(float));
 
     /* ========================== DENSE WMMA ========================== */
     ALLOC_GPU_MEM
     gridSize = {N / 16, N / 16, 1};
     blockSize = {32, 1, 1};
-    PREPARE_FUNC("Dense WMMA");
-    denseMatrixMulTensor<<<gridSize, blockSize>>
-            >(gpuA_half, gpuB_half, gpuC, N);
-    END_FUNC("Dense WMMA");
+    RUN_20_AND_REPORT("Dense WMMA", denseMatrixMulTensor<<<gridSize, blockSize>>>(gpuA_half, gpuB_half, gpuC, N));
 
     /* ========================== SpMM 1 Co ======================== */
     ALLOC_GPU_MEM
@@ -423,11 +434,7 @@ int main(const int argc, const char **argv) {
         1
     };
     blockSize = {N_THREADS, N_THREADS, 1};
-    PREPARE_FUNC("SpMM 1 Co");
-    sparseMatrixMult1Co<<<gridSize, blockSize>>>(gpuCSRHdr, gpuCSRIdx,
-                                                 gpuCSRData, gpuB_half, gpuC,
-                                                 N);
-    END_FUNC("SpMM 1 Co");
+    RUN_20_AND_REPORT("SpMM 1 Co", sparseMatrixMult1Co<<<gridSize, blockSize>>>(gpuCSRHdr, gpuCSRIdx, gpuCSRData, gpuB_half, gpuC, N));
 
     /* ========================== SpMM 1 ========================== */
     /*
@@ -478,34 +485,20 @@ int main(const int argc, const char **argv) {
     ALLOC_GPU_MEM
     gridSize = {N / 16, N / 16, 1};
     blockSize = {32, 1, 1};
-    PREPARE_FUNC("SpMM with Tensors");
-    sparseMatrixMulTensor<<<gridSize, blockSize>>>(gpuBCSRHdr, gpuBCSRIdx,
-                                                   gpuBCSRData, gpuB_half, gpuC,
-                                                   N);
-    END_FUNC("SpMM with Tensors");
+    RUN_20_AND_REPORT("SpMM with Tensors", sparseMatrixMulTensor<<<gridSize, blockSize>>>(gpuBCSRHdr, gpuBCSRIdx, gpuBCSRData, gpuB_half, gpuC, N));
 
     /* ==================== SpMM WITH TENSORS OPTIMIZED ==================== */
     ALLOC_GPU_MEM
     gridSize = {N / 16, N / 16, 1};
     blockSize = {32, 1, 1};
-    PREPARE_FUNC("SpMM with Tensors Op");
-    sparseMatrixMulTensor1<<<gridSize, blockSize>>>(gpuBCSRHdr, gpuBCSRIdx,
-                                                   gpuBCSRData, gpuB_half, gpuC,
-                                                   N);
-    END_FUNC("SpMM with Tensors Op");
+    RUN_20_AND_REPORT("SpMM with Tensors Op", sparseMatrixMulTensor1<<<gridSize, blockSize>>>(gpuBCSRHdr, gpuBCSRIdx, gpuBCSRData, gpuB_half, gpuC, N));
 
     /* ============================== CUBLAS =============================== */
 
     ALLOC_GPU_MEM
     cublasCreate(&cublasHandle);
 
-    PREPARE_FUNC("cuBLAS GeMM");
-    cublasGemmEx(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N, n, n, n, &alpha,
-                 gpuB_half, CUDA_R_16F, n,
-                 gpuA_half, CUDA_R_16F, n,
-                 &beta, gpuC, CUDA_R_32F, n, CUBLAS_COMPUTE_32F,
-                 CUBLAS_GEMM_DEFAULT);
-    END_FUNC("cuBLAS GeMM");
+    RUN_20_AND_REPORT("cuBLAS GeMM", cublasGemmEx(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N, n, n, n, &alpha, gpuB_half, CUDA_R_16F, n, gpuA_half, CUDA_R_16F, n, &beta, gpuC, CUDA_R_32F, n, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT));
 
     cublasDestroy(cublasHandle);
 
@@ -514,13 +507,12 @@ int main(const int argc, const char **argv) {
     ALLOC_GPU_MEM
     cublasCreate(&cublasHandle);
 
-    PREPARE_FUNC("cuBLAS GeMM with Tensors");
-    cublasGemmEx(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N, n, n, n, &alpha,
-                 gpuB_half, CUDA_R_16F, n,
-                 gpuA_half, CUDA_R_16F, n,
-                 &beta, gpuC, CUDA_R_32F, n, CUBLAS_COMPUTE_32F_FAST_16F,
-                 CUBLAS_GEMM_DEFAULT_TENSOR_OP);
-    END_FUNC("cuBLAS GeMM with Tensors");
+    // Enable tensor op math for this handle and do a warm-up GEMM to avoid
+    // JIT/cold-start overhead and ensure tensor-core kernels are resident.
+    cublasSetMathMode(cublasHandle, CUBLAS_TENSOR_OP_MATH);
+    /* Warm-up call (single, not timed) to prime cuBLAS / kernels */
+    cublasGemmEx(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N, n, n, n, &alpha, gpuB_half, CUDA_R_16F, n, gpuA_half, CUDA_R_16F, n, &beta, gpuC, CUDA_R_32F, n, CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+    RUN_20_AND_REPORT("cuBLAS GeMM with Tensors", cublasGemmEx(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N, n, n, n, &alpha, gpuB_half, CUDA_R_16F, n, gpuA_half, CUDA_R_16F, n, &beta, gpuC, CUDA_R_32F, n, CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
     cublasDestroy(cublasHandle);
 
@@ -560,16 +552,8 @@ int main(const int argc, const char **argv) {
                             CUSPARSE_SPMM_ALG_DEFAULT, &bufferSize);
     cudaMalloc(&gpuBuffer, bufferSize);
 
-    PREPARE_FUNC("cuSPARSE CSR");
-    cusparseSpMM(cusparseHandle,
-                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                 CUSPARSE_OPERATION_TRANSPOSE,
-                 &alpha, matDescrA, matDescrB, &beta,
-                 matDescrC, CUDA_R_32F,
-                 CUSPARSE_SPMM_ALG_DEFAULT, gpuBuffer);
-    END_FUNC("cuSPARSE CSR",
-             cusparseDnMatGet(matDescrC, &rows, &cols, &ld, reinterpret_cast<
-                 void **>(&gpuC), &dataType, &order););
+    RUN_20_AND_REPORT("cuSPARSE CSR", cusparseSpMM(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, CUSPARSE_OPERATION_TRANSPOSE, &alpha, matDescrA, matDescrB, &beta, matDescrC, CUDA_R_32F, CUSPARSE_SPMM_ALG_DEFAULT, gpuBuffer));
+    cusparseDnMatGet(matDescrC, &rows, &cols, &ld, reinterpret_cast<void **>(&gpuC), &dataType, &order);
 
     /* ============================ HYBRID CSR ============================= */
 
@@ -582,28 +566,20 @@ int main(const int argc, const char **argv) {
         hcsrA->csr->copyToDevice(&gpuCSRHdrPart, &gpuCSRIdxPart, &gpuCSRDataPart);
 
         string functionName = "Hybrid CSR " + to_string(threshold);
-        PREPARE_FUNC(functionName.c_str());
-        gridSize = {
-            N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0),
-            N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0),
-            1
-        };
-        blockSize = {N_THREADS, N_THREADS, 1};
-        sparseMatrixMult1Co<<<gridSize, blockSize>>>(gpuCSRHdrPart,
-            gpuCSRIdxPart, gpuCSRDataPart, gpuB_half, gpuCPart, N);
-        gridSize = {N / 16, N / 16, 1};
-        blockSize = {32, 1, 1};
-        sparseMatrixMulTensor1<<<gridSize, blockSize>>>(gpuBCSRHdrPart,
-            gpuBCSRIdxPart, gpuBCSRDataPart, gpuB_half, gpuC, N);
-        gridSize = {
-            CEIL_DIV(N, (N_THREADS * N_THREADS)),
-            CEIL_DIV(N, CEIL_DIV(N_THREADS * N_THREADS, N)),
-            1
-        };
-        blockSize = {N_THREADS * N_THREADS, 1, 1};
-        addMatrices<<<gridSize, blockSize>>>(gpuC, gpuCPart, N);
-
-        END_FUNC(functionName.c_str());
+        /* Run the 3-kernel hybrid sequence 20 times and report median */
+        RUN_20_AND_REPORT(functionName.c_str(), \
+            gridSize = {
+                N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0),
+                N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0),
+                1
+            }; \
+            blockSize = {N_THREADS, N_THREADS, 1}; \
+            sparseMatrixMult1Co<<<gridSize, blockSize>>>(gpuCSRHdrPart, gpuCSRIdxPart, gpuCSRDataPart, gpuB_half, gpuCPart, N); \
+            gridSize = {N / 16, N / 16, 1}; blockSize = {32, 1, 1}; \
+            sparseMatrixMulTensor1<<<gridSize, blockSize>>>(gpuBCSRHdrPart, gpuBCSRIdxPart, gpuBCSRDataPart, gpuB_half, gpuC, N); \
+            gridSize = { CEIL_DIV(N, (N_THREADS * N_THREADS)), CEIL_DIV(N, CEIL_DIV(N_THREADS * N_THREADS, N)), 1 }; \
+            blockSize = {N_THREADS * N_THREADS, 1, 1}; \
+            addMatrices<<<gridSize, blockSize>>>(gpuC, gpuCPart, N) );
     }
 
     cusparseDestroySpMat(matDescrA);
