@@ -351,6 +351,8 @@ int main(const int argc, const char **argv) {
 
     const Matrix *matrixA = new Matrix(MATRIX_A_PATH);
     const Matrix *matrixB = new Matrix(MATRIX_B_PATH);
+    std::cout << "Matrix A: " << matrixA->rows << " x " << matrixA->cols << ", nonZeros: " << matrixA->nonZeros << std::endl;
+
     assert(matrixA->rows && matrixA->cols && matrixB->rows && matrixB->cols);
     assert(matrixA->cols == matrixB->rows);
     N = matrixA->cols;

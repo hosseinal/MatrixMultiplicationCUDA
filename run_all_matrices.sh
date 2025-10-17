@@ -1,4 +1,17 @@
-#!/usr/bin/env bash
+#!/bin/bash
+
+##################### SLURM (do not change) v  #####################
+#SBATCH --export=ALL
+#SBATCH --job-name="project"
+#SBATCH --nodes=1
+#SBATCH --output="project.%j.%N.out"
+#SBATCH -t 24:00:00
+##################### SLURM (do not change) ^  #####################
+
+# Above are SLURM directives for job scheduling on a cluster,
+export SLURM_CONF=/etc/slurm/slurm.conf
+
+
 set -euo pipefail
 
 # run_all_matrices.sh
@@ -9,6 +22,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$ROOT_DIR/build/matrix_multiplication"
 MATRICES_DIR="$ROOT_DIR/matrices"
+
+# Always build the project before running benchmarks. This runs CMake and builds
+# the `matrix_multiplication` target in the `build/` directory.
+echo "Building project (cmake -> build)..."
+cd "$ROOT_DIR"
+mkdir -p build
+# configure
+cmake -S . -B build
+# build with parallel jobs
+cmake --build build -- -j$(nproc)
+
 
 if [[ ! -x "$BIN" ]]; then
   echo "ERROR: binary not found or not executable: $BIN"
