@@ -27,11 +27,12 @@ MATRICES_DIR="$ROOT_DIR/matrices"
 # the `matrix_multiplication` target in the `build/` directory.
 echo "Building project (cmake -> build)..."
 cd "$ROOT_DIR"
-mkdir -p build
+mkdir build
 # configure
-cmake -S . -B build
-# build with parallel jobs
-cmake --build build -- -j$(nproc)
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make
+cd ..
 
 
 if [[ ! -x "$BIN" ]]; then
