@@ -23,16 +23,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$ROOT_DIR/build/matrix_multiplication"
 MATRICES_DIR="$ROOT_DIR/matrices"
 
-# Always build the project before running benchmarks. This runs CMake and builds
-# the `matrix_multiplication` target in the `build/` directory.
-echo "Building project (cmake -> build)..."
-cd "$ROOT_DIR"
-mkdir build
-# configure
-cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make
-cd ..
+# # Always build the project before running benchmarks. This runs CMake and builds
+# # the `matrix_multiplication` target in the `build/` directory.
+# echo "Building project (cmake -> build)..."
+# cd "$ROOT_DIR"
+# echo "$ROOT_DIR"
+# mkdir build
+# # configure
+# cd build
+# cmake -DCMAKE_BUILD_TYPE=Release ..
+# make
+# cd ..
 
 
 if [[ ! -x "$BIN" ]]; then
