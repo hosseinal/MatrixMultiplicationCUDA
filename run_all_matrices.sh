@@ -19,9 +19,10 @@ set -euo pipefail
 # `build/matrix_multiplication` for each A/B pair and stores output into
 # `matrices/<pattern>/results.csv`.
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT_DIR/build/matrix_multiplication"
-MATRICES_DIR="$ROOT_DIR/matrices"
+# Use relative locations from script start directory (no pwd/ROOT_DIR required)
+# This assumes the script is started from the project root (where this file lives)
+BIN="./build/matrix_multiplication"
+MATRICES_DIR="./matrices"
 
 # # Always build the project before running benchmarks. This runs CMake and builds
 # # the `matrix_multiplication` target in the `build/` directory.
