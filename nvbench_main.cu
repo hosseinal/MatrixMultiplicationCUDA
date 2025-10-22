@@ -1,270 +1,236 @@
-// Minimal nvbench harness that reuses existing kernels in main.cu
-#include <cassert>
-#include <iostream>
+// nvbench harness to run selected kernels from main.cu across patterns/sizes/sparsities
 #include <nvbench/nvbench.cuh>
-#include <cublas_v2.h>
-#include <cusparse_v2.h>
+#include <cuda_runtime.h>
+#include <vector>
+#include <string>
+#include <memory>
 
-#include "BCSRMatrix.cuh"
-#include "CSRMatrix.cuh"
-#include "HCSRMatrix.h"
+#include "matrix_generator.h"
+// Include implementation so templates are available in this TU (quick solution)
+#include "matrix_generator.cpp"
+
 #include "Matrix.cuh"
-#include "miscutil.h"
+#include "CSRMatrix.cuh"
+#include "BCSRMatrix.cuh"
+#include "HCSRMatrix.h"
 
-using namespace std;
+using mg::Matrix as GenMatrix;
 
-// Local copy of globals from main.cu
-extern unsigned int N;
-extern string MATRIX_A_PATH;
-extern string MATRIX_B_PATH;
-extern string MATRIX_PATTERN;
-extern string MATRIX_SPARSITY;
-
-// forward declare kernels from main.cu
-__global__ void denseMatrixMulCo(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
-__global__ void denseMatrixMulTensor(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
-__global__ void sparseMatrixMult1Co(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-__global__ void sparseMatrixMulTensor(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-__global__ void sparseMatrixMulTensor1(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-
-// Device buffer holder
-struct DevBuffers {
-    half *gpuA_half = nullptr;
-    half *gpuB_half = nullptr;
-    float *gpuC = nullptr;
-    float *gpuCPart = nullptr;
-    int *gpuCSRHdr = nullptr;
-    int *gpuCSRIdx = nullptr;
-    half *gpuCSRData = nullptr;
-    int *gpuBCSRHdr = nullptr;
-    int *gpuBCSRIdx = nullptr;
-    half *gpuBCSRData = nullptr;
+static const std::vector<std::string> patterns = {
+	"random",
+	"checkerboard",
+	"diagonal",
+	"blockdiagonal",
+	"blockrandom"
 };
 
-static DevBuffers setup_device(const Matrix *matrixA, const Matrix *matrixB, CSRMatrix *&csrA, BCSRMatrix *&bcsrA) {
-    DevBuffers dev;
-    N = matrixA->cols;
-    csrA = new CSRMatrix(*matrixA);
-    bcsrA = new BCSRMatrix(*matrixA);
-
-    // copy CSR/BCSR to device
-    bcsrA->copyToDevice(&dev.gpuBCSRHdr, &dev.gpuBCSRIdx, &dev.gpuBCSRData);
-    csrA->copyToDevice(&dev.gpuCSRHdr, &dev.gpuCSRIdx, &dev.gpuCSRData);
-
-    // allocate dense buffers
-    cudaMalloc(reinterpret_cast<void **>(&dev.gpuA_half), N * N * sizeof(half));
-    cudaMalloc(reinterpret_cast<void **>(&dev.gpuB_half), N * N * sizeof(half));
-    cudaMalloc(reinterpret_cast<void **>(&dev.gpuC), N * N * sizeof(float));
-    cudaMalloc(reinterpret_cast<void **>(&dev.gpuCPart), N * N * sizeof(float));
-
-    cudaMemcpy(dev.gpuA_half, matrixA->data, N * N * sizeof(half), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev.gpuB_half, matrixB->data, N * N * sizeof(half), cudaMemcpyHostToDevice);
-
-    cudaMemset(dev.gpuC, 0, N * N * sizeof(float));
-    cudaMemset(dev.gpuCPart, 0, N * N * sizeof(float));
-
-    return dev;
+// Helper: fill project Matrix from generated float matrix
+static void fill_Matrix_from_generated(Matrix &dst, const std::vector<std::vector<float>> &src) {
+	int rows = dst.rows;
+	int cols = dst.cols;
+	for (int i = 0; i < rows; ++i) {
+		for (int j = 0; j < cols; ++j) {
+			dst.data[i * cols + j] = __float2half(src[i][j]);
+		}
+	}
 }
 
-static void teardown_device(DevBuffers &dev, CSRMatrix *csrA, BCSRMatrix *bcsrA) {
-    if (dev.gpuA_half) cudaFree(dev.gpuA_half);
-    if (dev.gpuB_half) cudaFree(dev.gpuB_half);
-    if (dev.gpuC) cudaFree(dev.gpuC);
-    if (dev.gpuCPart) cudaFree(dev.gpuCPart);
-    if (dev.gpuCSRData) cudaFree(dev.gpuCSRData);
-    if (dev.gpuCSRHdr) cudaFree(dev.gpuCSRHdr);
-    if (dev.gpuCSRIdx) cudaFree(dev.gpuCSRIdx);
-    if (dev.gpuBCSRData) cudaFree(dev.gpuBCSRData);
-    if (dev.gpuBCSRHdr) cudaFree(dev.gpuBCSRHdr);
-    if (dev.gpuBCSRIdx) cudaFree(dev.gpuBCSRIdx);
-    delete csrA;
-    delete bcsrA;
+// Common generation + device copy helper
+struct GenDeviceBuffers {
+	Matrix *matrixA = nullptr;
+	Matrix *matrixB = nullptr;
+	CSRMatrix *csrA = nullptr;
+	BCSRMatrix *bcsrA = nullptr;
+	// device pointers
+	half *gpuA_half = nullptr;
+	half *gpuB_half = nullptr;
+	float *gpuC = nullptr;
+	float *gpuCPart = nullptr;
+	int *gpuCSRHdr = nullptr, *gpuCSRIdx = nullptr;
+	half *gpuCSRData = nullptr;
+	int *gpuBCSRHdr = nullptr, *gpuBCSRIdx = nullptr;
+	half *gpuBCSRData = nullptr;
+
+	~GenDeviceBuffers() {
+		if (gpuC) cudaFree(gpuC);
+		if (gpuCPart) cudaFree(gpuCPart);
+		if (gpuA_half) cudaFree(gpuA_half);
+		if (gpuB_half) cudaFree(gpuB_half);
+		// Note: CSR/BCSR device frees are handled by their copyToDevice callers or not needed here
+		delete csrA;
+		delete bcsrA;
+		delete matrixA;
+		delete matrixB;
+	}
+};
+
+static std::unique_ptr<GenDeviceBuffers> prepare_buffers(int N, double sparsity, const std::string &pattern) {
+	auto out = std::make_unique<GenDeviceBuffers>();
+	// Generate float matrices with generator
+	auto genA = mg::generate_matrix<float>(N, N, sparsity, pattern, 16, 123);
+	auto genB = mg::generate_matrix<float>(N, N, 0.0, "random", 16, 456);
+
+	out->matrixA = new Matrix(N, N);
+	out->matrixB = new Matrix(N, N);
+	fill_Matrix_from_generated(*out->matrixA, genA);
+	fill_Matrix_from_generated(*out->matrixB, genB);
+
+	// Build sparse representations from matrixA
+	out->csrA = new CSRMatrix(*out->matrixA);
+	out->bcsrA = new BCSRMatrix(*out->matrixA);
+
+	// Copy CSR/BCSR to device
+	out->bcsrA->copyToDevice(&out->gpuBCSRHdr, &out->gpuBCSRIdx, &out->gpuBCSRData);
+	out->csrA->copyToDevice(&out->gpuCSRHdr, &out->gpuCSRIdx, &out->gpuCSRData);
+
+	size_t bytes_half = static_cast<size_t>(N) * N * sizeof(half);
+	size_t bytes_float = static_cast<size_t>(N) * N * sizeof(float);
+	cudaMalloc(reinterpret_cast<void **>(&out->gpuA_half), bytes_half);
+	cudaMalloc(reinterpret_cast<void **>(&out->gpuB_half), bytes_half);
+	cudaMalloc(reinterpret_cast<void **>(&out->gpuC), bytes_float);
+	cudaMalloc(reinterpret_cast<void **>(&out->gpuCPart), bytes_float);
+	cudaMemcpy(out->gpuA_half, out->matrixA->data, bytes_half, cudaMemcpyHostToDevice);
+	cudaMemcpy(out->gpuB_half, out->matrixB->data, bytes_half, cudaMemcpyHostToDevice);
+	cudaMemset(out->gpuC, 0, bytes_float);
+	cudaMemset(out->gpuCPart, 0, bytes_float);
+
+	return out;
 }
 
-// Bench: Dense WMMA (uses denseMatrixMulTensor kernel)
-static void bench_dense_wmma(nvbench::state &state) {
-    const char *a_path = getenv("MATRIX_A_PATH");
-    const char *b_path = getenv("MATRIX_B_PATH");
-    const Matrix *matrixA = new Matrix(a_path ? a_path : "../medA.mat");
-    const Matrix *matrixB = new Matrix(b_path ? b_path : "../medB.mat");
-    CSRMatrix *csrA = nullptr; BCSRMatrix *bcsrA = nullptr;
-    DevBuffers dev = setup_device(matrixA, matrixB, csrA, bcsrA);
+// Benchmark: denseMatrixMul (naive)
+static void bench_denseMatrixMul(nvbench::state &state) {
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
 
-    state.exec([&](nvbench::launch &launch) {
-        const int n = static_cast<int>(N);
-        dim3 grid(n / 16, n / 16, 1);
-        dim3 block(32, 1, 1);
-        denseMatrixMulTensor<<<grid, block, 0, launch.get_stream()>>>(dev.gpuA_half, dev.gpuB_half, dev.gpuC, N);
-        cudaStreamSynchronize(launch.get_stream());
-    });
+	auto buf = prepare_buffers(N, spars, pattern);
 
-    teardown_device(dev, csrA, bcsrA);
-    delete matrixA; delete matrixB;
+	// grid/block similar to main.cu naive kernel
+	dim3 gridSize{static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), 1};
+	dim3 blockSize{N_THREADS, N_THREADS, 1};
+
+	state.add_element_count(static_cast<size_t>(N) * N);
+	state.exec([&](nvbench::launch &launch){
+		denseMatrixMul<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
+		cudaStreamSynchronize(launch.get_stream());
+	});
 }
 
-NVBENCH_BENCH(bench_dense_wmma).set_name("Dense WMMA");
+// Benchmark: denseMatrixMulTensor (wmma)
+static void bench_denseMatrixMulTensor(nvbench::state &state) {
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
 
-// Bench: SpMM with Tensors
-static void bench_spmm_tensors(nvbench::state &state) {
-    const char *a_path = getenv("MATRIX_A_PATH");
-    const char *b_path = getenv("MATRIX_B_PATH");
-    const Matrix *matrixA = new Matrix(a_path ? a_path : "../medA.mat");
-    const Matrix *matrixB = new Matrix(b_path ? b_path : "../medB.mat");
-    CSRMatrix *csrA = nullptr; BCSRMatrix *bcsrA = nullptr;
-    DevBuffers dev = setup_device(matrixA, matrixB, csrA, bcsrA);
+	auto buf = prepare_buffers(N, spars, pattern);
 
-    state.exec([&](nvbench::launch &launch) {
-        const int n = static_cast<int>(N);
-        dim3 grid(n / 16, n / 16, 1);
-        dim3 block(32, 1, 1);
-        sparseMatrixMulTensor<<<grid, block, 0, launch.get_stream()>>>(dev.gpuBCSRHdr, dev.gpuBCSRIdx, dev.gpuBCSRData, dev.gpuB_half, dev.gpuC, N);
-        cudaStreamSynchronize(launch.get_stream());
-    });
+	dim3 gridSize{static_cast<unsigned int>(N / 16), static_cast<unsigned int>(N / 16), 1};
+	dim3 blockSize{32, 1, 1};
 
-    teardown_device(dev, csrA, bcsrA);
-    delete matrixA; delete matrixB;
+	state.add_element_count(static_cast<size_t>(N) * N);
+	state.exec([&](nvbench::launch &launch){
+		denseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
+		cudaStreamSynchronize(launch.get_stream());
+	});
 }
 
-    // Bench: Dense GPU (coalesced) -> denseMatrixMulCo
-    static void bench_dense_coalesced(nvbench::state &state) {
-        const Matrix *matrixA = new Matrix(MATRIX_A_PATH);
-        const Matrix *matrixB = new Matrix(MATRIX_B_PATH);
-        CSRMatrix *csrA = nullptr; BCSRMatrix *bcsrA = nullptr;
-        DevBuffers dev = setup_device(matrixA, matrixB, csrA, bcsrA);
+// Benchmark: sparseMatrixMult1
+static void bench_sparseMatrixMult1(nvbench::state &state) {
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
 
-        state.exec([&](nvbench::launch &launch) {
-            const int n = static_cast<int>(N);
-            dim3 grid(CEIL_DIV(n, (N_THREADS * N_THREADS)), CEIL_DIV(n, CEIL_DIV(N_THREADS * N_THREADS, n)), 1);
-            dim3 block(N_THREADS * N_THREADS, 1, 1);
-            denseMatrixMulCo<<<grid, block, 0, launch.get_stream()>>>(dev.gpuA_half, dev.gpuB_half, dev.gpuC, N);
-            cudaStreamSynchronize(launch.get_stream());
-        });
+	auto buf = prepare_buffers(N, spars, pattern);
 
-        teardown_device(dev, csrA, bcsrA);
-        delete matrixA; delete matrixB;
-    }
+	dim3 gridSize{static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), 1};
+	dim3 blockSize{N_THREADS, N_THREADS, 1};
 
-    NVBENCH_BENCH(bench_dense_coalesced).set_name("Dense on GPU Coalescence");
-
-    // Bench: SpMM 1 Co (CSR * dense) -> sparseMatrixMult1Co
-    static void bench_spmm1_co(nvbench::state &state) {
-        const Matrix *matrixA = new Matrix(MATRIX_A_PATH);
-        const Matrix *matrixB = new Matrix(MATRIX_B_PATH);
-        CSRMatrix *csrA = nullptr; BCSRMatrix *bcsrA = nullptr;
-        DevBuffers dev = setup_device(matrixA, matrixB, csrA, bcsrA);
-
-        state.exec([&](nvbench::launch &launch) {
-            dim3 grid( CEIL_DIV(N, N_THREADS), CEIL_DIV(N, N_THREADS), 1 );
-            dim3 block(N_THREADS, N_THREADS, 1);
-            sparseMatrixMult1Co<<<grid, block, 0, launch.get_stream()>>>(dev.gpuCSRHdr, dev.gpuCSRIdx, dev.gpuCSRData, dev.gpuB_half, dev.gpuC, N);
-            cudaStreamSynchronize(launch.get_stream());
-        });
-
-        teardown_device(dev, csrA, bcsrA);
-        delete matrixA; delete matrixB;
-    }
-
-    NVBENCH_BENCH(bench_spmm1_co).set_name("SpMM 1 Co");
-
-NVBENCH_BENCH(bench_spmm_tensors).set_name("SpMM with Tensors");
-
-// Bench: SpMM with Tensors Opt
-static void bench_spmm_tensors_op(nvbench::state &state) {
-    const char *a_path = getenv("MATRIX_A_PATH");
-    const char *b_path = getenv("MATRIX_B_PATH");
-    const Matrix *matrixA = new Matrix(a_path ? a_path : "../medA.mat");
-    const Matrix *matrixB = new Matrix(b_path ? b_path : "../medB.mat");
-    CSRMatrix *csrA = nullptr; BCSRMatrix *bcsrA = nullptr;
-    DevBuffers dev = setup_device(matrixA, matrixB, csrA, bcsrA);
-
-    state.exec([&](nvbench::launch &launch) {
-        const int n = static_cast<int>(N);
-        dim3 grid(n / 16, n / 16, 1);
-        dim3 block(32, 1, 1);
-        sparseMatrixMulTensor1<<<grid, block, 0, launch.get_stream()>>>(dev.gpuBCSRHdr, dev.gpuBCSRIdx, dev.gpuBCSRData, dev.gpuB_half, dev.gpuC, N);
-        cudaStreamSynchronize(launch.get_stream());
-    });
-
-    teardown_device(dev, csrA, bcsrA);
-    delete matrixA; delete matrixB;
+	state.add_element_count(static_cast<size_t>(N) * N);
+	state.exec([&](nvbench::launch &launch){
+		sparseMatrixMult1<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuCSRHdr, buf->gpuCSRIdx, buf->gpuCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
+		cudaStreamSynchronize(launch.get_stream());
+	});
 }
 
-NVBENCH_BENCH(bench_spmm_tensors_op).set_name("SpMM with Tensors Op");
+// Benchmark: sparseMatrixMulTensor (BCSR tensor)
+static void bench_sparseMatrixMulTensor(nvbench::state &state) {
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
 
-// Bench: cuBLAS GeMM (with tensor ops)
-static void bench_cublas_gemm_tensor(nvbench::state &state) {
-    const char *a_path = getenv("MATRIX_A_PATH");
-    const char *b_path = getenv("MATRIX_B_PATH");
-    const Matrix *matrixA = new Matrix(a_path ? a_path : "../medA.mat");
-    const Matrix *matrixB = new Matrix(b_path ? b_path : "../medB.mat");
-    CSRMatrix *csrA = nullptr; BCSRMatrix *bcsrA = nullptr;
-    DevBuffers dev = setup_device(matrixA, matrixB, csrA, bcsrA);
+	auto buf = prepare_buffers(N, spars, pattern);
 
-    cublasHandle_t cublasHandle;
-    cublasCreate(&cublasHandle);
-    cublasSetMathMode(cublasHandle, CUBLAS_TENSOR_OP_MATH);
+	dim3 gridSize{static_cast<unsigned int>(N / 16), static_cast<unsigned int>(N / 16), 1};
+	dim3 blockSize{32, 1, 1};
 
-    state.exec([&](nvbench::launch &launch) {
-        const int n = static_cast<int>(N);
-        cublasSetStream(cublasHandle, launch.get_stream());
-        const float alpha = 1.0f, beta = 0.0f;
-        cublasGemmEx(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N, n, n, n, &alpha, dev.gpuB_half, CUDA_R_16F, n, dev.gpuA_half, CUDA_R_16F, n, &beta, dev.gpuC, CUDA_R_32F, n, CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
-    });
-
-    cublasDestroy(cublasHandle);
-    teardown_device(dev, csrA, bcsrA);
-    delete matrixA; delete matrixB;
+	state.add_element_count(static_cast<size_t>(N) * N);
+	state.exec([&](nvbench::launch &launch){
+		sparseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
+		cudaStreamSynchronize(launch.get_stream());
+	});
 }
 
-NVBENCH_BENCH(bench_cublas_gemm_tensor).set_name("cuBLAS GeMM with Tensors");
+// Benchmark: cuBLAS (GEMM) - no tensor ops
+static void bench_cuBLAS(nvbench::state &state) {
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
 
-// Bench: cuSPARSE SpMM
-static void bench_cusparse_spmm(nvbench::state &state) {
-    const char *a_path = getenv("MATRIX_A_PATH");
-    const char *b_path = getenv("MATRIX_B_PATH");
-    const Matrix *matrixA = new Matrix(a_path ? a_path : "../medA.mat");
-    const Matrix *matrixB = new Matrix(b_path ? b_path : "../medB.mat");
-    CSRMatrix *csrA = nullptr; BCSRMatrix *bcsrA = nullptr;
-    DevBuffers dev = setup_device(matrixA, matrixB, csrA, bcsrA);
+	auto buf = prepare_buffers(N, spars, pattern);
 
-    // Prepare cuSPARSE descriptors and workspace once, outside the timed region
-    cusparseHandle_t cusparseHandle;
-    cusparseCreate(&cusparseHandle);
-
-    const int n = static_cast<int>(N);
-    cusparseMatDescr_t cusparseMatDescr;
-    cusparseCreateMatDescr(&cusparseMatDescr);
-    cusparseSetMatType(cusparseMatDescr, CUSPARSE_MATRIX_TYPE_GENERAL);
-    cusparseSetMatIndexBase(cusparseMatDescr, CUSPARSE_INDEX_BASE_ZERO);
-
-    cusparseSpMatDescr_t matDescrA;
-    cusparseDnMatDescr_t matDescrB, matDescrC;
-    cusparseCreateCsr(&matDescrA, n, n, csrA->hdr[N], dev.gpuCSRHdr, dev.gpuCSRIdx, dev.gpuCSRData, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_16F);
-    cusparseCreateDnMat(&matDescrB, n, n, n, dev.gpuB_half, CUDA_R_16F, CUSPARSE_ORDER_COL);
-    cusparseCreateDnMat(&matDescrC, n, n, n, dev.gpuC, CUDA_R_32F, CUSPARSE_ORDER_ROW);
-
-    size_t bufferSize = 0;
-    cusparseSpMM_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, CUSPARSE_OPERATION_TRANSPOSE, (const float *)&(const float){1.0f}, matDescrA, matDescrB, (const float *)&(const float){0.0f}, matDescrC, CUDA_R_32F, CUSPARSE_SPMM_ALG_DEFAULT, &bufferSize);
-    void *gpuBuffer = nullptr;
-    if (bufferSize > 0) cudaMalloc(&gpuBuffer, bufferSize);
-
-    // Timed region: only invoke cusparseSpMM on the nvbench stream
-    state.exec([&](nvbench::launch &launch) {
-        cusparseSetStream(cusparseHandle, launch.get_stream());
-        cusparseSpMM(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, CUSPARSE_OPERATION_TRANSPOSE, (const float *)&(const float){1.0f}, matDescrA, matDescrB, (const float *)&(const float){0.0f}, matDescrC, CUDA_R_32F, CUSPARSE_SPMM_ALG_DEFAULT, gpuBuffer);
-        cudaStreamSynchronize(launch.get_stream());
-    });
-
-    if (gpuBuffer) cudaFree(gpuBuffer);
-    cusparseDestroySpMat(matDescrA);
-    cusparseDestroyDnMat(matDescrB);
-    cusparseDestroyDnMat(matDescrC);
-    cusparseDestroy(cusparseHandle);
-    teardown_device(dev, csrA, bcsrA);
-    delete matrixA; delete matrixB;
+	cublasHandle_t handle;
+	cublasCreate(&handle);
+	constexpr float alpha = 1.0f;
+	constexpr float beta = 0.0f;
+	state.add_element_count(static_cast<size_t>(N) * N);
+	state.exec([&](nvbench::launch &launch){
+		cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, N, N, &alpha, buf->gpuB_half, CUDA_R_16F, N, buf->gpuA_half, CUDA_R_16F, N, &beta, buf->gpuC, CUDA_R_32F, N, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+	});
+	cublasDestroy(handle);
 }
 
-NVBENCH_BENCH(bench_cusparse_spmm).set_name("cuSPARSE CSR");
+// Benchmark: cuBLAS with Tensor Cores
+static void bench_cuBLAS_Tensor(nvbench::state &state) {
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
 
-NVBENCH_MAIN();
+	auto buf = prepare_buffers(N, spars, pattern);
+
+	cublasHandle_t handle;
+	cublasCreate(&handle);
+	cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH);
+	constexpr float alpha = 1.0f;
+	constexpr float beta = 0.0f;
+	// warm up
+	cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, N, N, &alpha, buf->gpuB_half, CUDA_R_16F, N, buf->gpuA_half, CUDA_R_16F, N, &beta, buf->gpuC, CUDA_R_32F, N, CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+
+	state.add_element_count(static_cast<size_t>(N) * N);
+	state.exec([&](nvbench::launch &launch){
+		cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, N, N, &alpha, buf->gpuB_half, CUDA_R_16F, N, buf->gpuA_half, CUDA_R_16F, N, &beta, buf->gpuC, CUDA_R_32F, N, CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+	});
+
+	cublasDestroy(handle);
+}
+
+// Register benches and axes
+NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+
 

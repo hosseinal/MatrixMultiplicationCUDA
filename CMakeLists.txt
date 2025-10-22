@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.30 FATAL_ERROR)
 
 # set host compiler
 set(CMAKE_CXX_STANDARD 14)
@@ -38,6 +38,14 @@ find_package(CUDAToolkit REQUIRED)
 
 target_link_libraries(matrix_multiplication CUDA::cusparse stdc++ -lcublas
         -lcurand)
+
+# Optional: build a small matrix generator test (CPU-only)
+option(BUILD_MG_TEST "Build matrix generator test" OFF)
+if(BUILD_MG_TEST)
+    add_executable(matrix_generator_test matrix_generator_test.cpp matrix_generator.cpp)
+    target_include_directories(matrix_generator_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    set_target_properties(matrix_generator_test PROPERTIES CXX_STANDARD 17)
+endif()
 
 # Set optimization flags
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
