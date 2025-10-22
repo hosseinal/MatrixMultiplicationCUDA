@@ -52,28 +52,34 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3")
 endif() 
 
-# Optional nvbench target (minimal integration)
-option(USE_NVBENCH "Build nvbench harness (requires nvbench headers installed)" OFF)
-if(USE_NVBENCH)
-    add_executable(matrix_multiplication_nvbench
-        nvbench_main.cu
-        main.cu
-        Matrix.cuh
-        Matrix.cu
-        CSRMatrix.cu
-        CSRMatrix.cuh
-        BCSRMatrix.cu
-        BCSRMatrix.cuh
-        miscutil.cpp
-        miscutil.h
-        HCSRMatrix.cpp
-        HCSRMatrix.h
-    )
-    set_target_properties(matrix_multiplication_nvbench PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-    target_compile_definitions(matrix_multiplication_nvbench PRIVATE USE_NVBENCH)
-    # If nvbench headers are not in a standard location, set NVBENCH_INCLUDE_DIR when running cmake
-    if(DEFINED NVBENCH_INCLUDE_DIR)
-        target_include_directories(matrix_multiplication_nvbench PRIVATE ${NVBENCH_INCLUDE_DIR})
-    endif()
-    target_link_libraries(matrix_multiplication_nvbench CUDA::cusparse stdc++ -lcublas -lcurand)
+# nvbench target (integration)
+include(FetchContent)
+FetchContent_Declare(
+  nvbench
+  GIT_REPOSITORY https://github.com/NVIDIA/nvbench.git
+  GIT_TAG        main
+)
+FetchContent_MakeAvailable(nvbench)
+
+add_executable(matrix_multiplication_nvbench
+    nvbench_main.cu
+    main.cu
+    Matrix.cuh
+    Matrix.cu
+    CSRMatrix.cu
+    CSRMatrix.cuh
+    BCSRMatrix.cu
+    BCSRMatrix.cuh
+    miscutil.cpp
+    miscutil.h
+    HCSRMatrix.cpp
+    HCSRMatrix.h
+)
+set_target_properties(matrix_multiplication_nvbench PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(matrix_multiplication_nvbench PROPERTIES CXX_STANDARD 17)
+target_compile_definitions(matrix_multiplication_nvbench PRIVATE USE_NVBENCH)
+# If nvbench headers are not in a standard location, set NVBENCH_INCLUDE_DIR when running cmake
+if(DEFINED NVBENCH_INCLUDE_DIR)
+    target_include_directories(matrix_multiplication_nvbench PRIVATE ${NVBENCH_INCLUDE_DIR})
 endif()
+target_link_libraries(matrix_multiplication_nvbench PRIVATE nvbench_main CUDA::cusparse stdc++ -lcublas -lcurand)
