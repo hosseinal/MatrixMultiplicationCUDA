@@ -56,3 +56,5 @@ CTestTestfile.cmake
 # Build directory
 build/
 cmake-build-*/
+plots/
+nvbench/build/

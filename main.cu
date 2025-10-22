@@ -344,6 +344,10 @@ __global__ void addMatrices(float *C, const float *CPart, const unsigned int n) 
     }
 }
 
+// When building the nvbench target we provide a separate main in nvbench_main.cu.
+// Exclude this application's main to avoid duplicate symbol and let nvbench
+// supply its own entry point.
+#ifndef USE_NVBENCH
 int main(const int argc, const char **argv) {
     if (argc >= 2) MATRIX_A_PATH = argv[1];
     if (argc >= 3) MATRIX_B_PATH = argv[2];
@@ -604,5 +608,6 @@ int main(const int argc, const char **argv) {
 
     return 0;
 }
+#endif // USE_NVBENCH
 
 // vim: ts=4 sw=4
