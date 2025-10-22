@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set CUDA architectures
-set(CMAKE_CUDA_ARCHITECTURES 86)
+set(CMAKE_CUDA_ARCHITECTURES 53;60;70;75;80;86;89)
 
 project(MatrixMultiplicationCUDA LANGUAGES CXX CUDA)
 
@@ -52,7 +52,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3")
 endif() 
 
-# nvbench target (integration)
+# Option A: use FetchContent to pull NVBench
 include(FetchContent)
 FetchContent_Declare(
   nvbench

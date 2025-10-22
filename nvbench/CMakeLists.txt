@@ -17,4 +17,4 @@ add_executable(vector_add main.cu)
 # NVBench provides the nvbench_main target which supplies main() & flags parsing
 target_link_libraries(vector_add PRIVATE nvbench_main)
 # (Optional) set your GPU architectures explicitly if needed
-# set_target_properties(vector_add PROPERTIES CUDA_ARCHITECTURES "60;70;75;80;86;89")
+# set_target_properties(vector_add PROPERTIES CUDA_ARCHITECTURES "53;60;70;75;80;86;89")
