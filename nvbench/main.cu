@@ -58,5 +58,5 @@ static void add_benchmark(nvbench::state& state)
 // Register the benchmark and define axes.
 NVBENCH_BENCH(add_benchmark)
   .set_name("vector_add")
-  .add_int64_axis("N", {1 << 16, 1 << 18, 1 << 20})       // try a few sizes
+  .add_int64_axis("N", {265,512,1024})       // try a few sizes
   .add_int64_axis("BLOCK_SIZE", {128, 256, 512});         // try a few blocks
