@@ -40,7 +40,7 @@ static void add_benchmark(nvbench::state& state)
   state.add_element_count(N);                         // elements processed
   state.add_global_memory_reads<float>(2 * N);        // a + b
   state.add_global_memory_writes<float>(N);           // c
-  state.add_flops(1.0 * N);                           // one add per element
+  // state.add_flops(1.0 * N); // not available in this nvbench version
 
   const int grid = static_cast<int>((N + BLOCK - 1) / BLOCK);
 
