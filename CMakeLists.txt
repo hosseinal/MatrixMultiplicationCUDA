@@ -52,14 +52,11 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3")
 endif() 
 
-# Option A: use FetchContent to pull NVBench
-include(FetchContent)
-FetchContent_Declare(
-  nvbench
-  GIT_REPOSITORY https://github.com/NVIDIA/nvbench.git
-  GIT_TAG        main
-)
-FetchContent_MakeAvailable(nvbench)
+# Use CPM to fetch NVBench's main branch (matches demo CMakeLists)
+# CPM: https://github.com/cpm-cmake/CPM.cmake
+# NVBench: https://github.com/NVIDIA/nvbench
+include(cmake/CPM.cmake)
+CPMAddPackage("gh:NVIDIA/nvbench#main")
 
 add_executable(matrix_multiplication_nvbench
     nvbench_main.cu
@@ -82,4 +79,4 @@ target_compile_definitions(matrix_multiplication_nvbench PRIVATE USE_NVBENCH)
 if(DEFINED NVBENCH_INCLUDE_DIR)
     target_include_directories(matrix_multiplication_nvbench PRIVATE ${NVBENCH_INCLUDE_DIR})
 endif()
-target_link_libraries(matrix_multiplication_nvbench PRIVATE nvbench_main CUDA::cusparse stdc++ -lcublas -lcurand)
+target_link_libraries(matrix_multiplication_nvbench PRIVATE nvbench::main CUDA::cusparse stdc++ -lcublas -lcurand)
