@@ -133,7 +133,7 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 	dim3 blockSize{N_THREADS, N_THREADS, 1};
 
 	state.add_element_count(static_cast<size_t>(N) * N);
-	state.exec([&](nvbench::launch &launch){
+	state.exec(nvbench::exec_tag::sync, [&](nvbench::launch &launch){
 		denseMatrixMul<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
 		cudaStreamSynchronize(launch.get_stream());
 	});
@@ -153,7 +153,7 @@ static void bench_denseMatrixMulTensor(nvbench::state &state) {
 	dim3 blockSize{32, 1, 1};
 
 	state.add_element_count(static_cast<size_t>(N) * N);
-	state.exec([&](nvbench::launch &launch){
+	state.exec(nvbench::exec_tag::sync, [&](nvbench::launch &launch){
 		denseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
 		cudaStreamSynchronize(launch.get_stream());
 	});
@@ -173,7 +173,7 @@ static void bench_sparseMatrixMult1(nvbench::state &state) {
 	dim3 blockSize{N_THREADS, N_THREADS, 1};
 
 	state.add_element_count(static_cast<size_t>(N) * N);
-	state.exec([&](nvbench::launch &launch){
+	state.exec(nvbench::exec_tag::sync, [&](nvbench::launch &launch){
 		sparseMatrixMult1<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuCSRHdr, buf->gpuCSRIdx, buf->gpuCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
 		cudaStreamSynchronize(launch.get_stream());
 	});
@@ -193,7 +193,7 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 	dim3 blockSize{32, 1, 1};
 
 	state.add_element_count(static_cast<size_t>(N) * N);
-	state.exec([&](nvbench::launch &launch){
+	state.exec(nvbench::exec_tag::sync, [&](nvbench::launch &launch){
 		sparseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
 		cudaStreamSynchronize(launch.get_stream());
 	});
