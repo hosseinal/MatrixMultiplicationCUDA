@@ -41,8 +41,8 @@ static void add_benchmark(nvbench::state& state)
   state.add_global_memory_reads<float>(2 * N);        // a + b
   state.add_global_memory_writes<float>(N);           // c
   // state.add_flops(1.0 * N); // not available in this nvbench version
-  state.collect_l1_hit_rate();                     // collect L1 cache hit rate
-  state.collect_l2_hit_rate();                     // collect L2 cache hit rate
+  state.collect_l1_hit_rates();                     // collect L1 cache hit rate
+  state.collect_l2_hit_rates();                     // collect L2 cache hit rate
 
   const int grid = static_cast<int>((N + BLOCK - 1) / BLOCK);
 
