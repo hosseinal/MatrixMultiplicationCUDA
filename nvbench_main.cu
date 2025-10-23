@@ -22,16 +22,17 @@
 
 // Forward-declare kernels from main.cu so this translation unit can
 // call them as CUDA kernels. Signatures must match the definitions
-// in main.cu.
-extern "C" {
-	__global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
-	__global__ void denseMatrixMulTensor(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
-	__global__ void sparseMatrixMult1(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-	__global__ void sparseMatrixMult1Co(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-	__global__ void sparseMatrixMulTensor(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-	__global__ void sparseMatrixMulTensor1(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-	__global__ void addMatrices(float *C, const float *CPart, const unsigned int n);
-}
+// in main.cu. Do NOT use extern "C" here — CUDA kernel symbols are
+// emitted by nvcc with device linkage and C++ linkage; adding
+// extern "C" prevents the correct linkage and causes undefined
+// references at link time.
+__global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
+__global__ void denseMatrixMulTensor(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
+__global__ void sparseMatrixMult1(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
+__global__ void sparseMatrixMult1Co(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
+__global__ void sparseMatrixMulTensor(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
+__global__ void sparseMatrixMulTensor1(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
+__global__ void addMatrices(float *C, const float *CPart, const unsigned int n);
 
 // Local constant to match main.cu's thread configuration
 constexpr unsigned int N_THREADS = 32;
