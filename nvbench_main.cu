@@ -1,6 +1,8 @@
 // nvbench harness to run selected kernels from main.cu across patterns/sizes/sparsities
 #include <nvbench/nvbench.cuh>
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
+#include <cublas_v2.h>
 #include <vector>
 #include <string>
 #include <memory>
@@ -14,7 +16,25 @@
 #include "BCSRMatrix.cuh"
 #include "HCSRMatrix.h"
 
-using mg::Matrix as GenMatrix;
+// The matrix generator provides mg::Matrix<T> as a templated alias.
+// We don't need to alias it here; the project's Matrix type is declared
+// in "Matrix.cuh" which is included below.
+
+// Forward-declare kernels from main.cu so this translation unit can
+// call them as CUDA kernels. Signatures must match the definitions
+// in main.cu.
+extern "C" {
+	__global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
+	__global__ void denseMatrixMulTensor(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
+	__global__ void sparseMatrixMult1(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
+	__global__ void sparseMatrixMult1Co(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
+	__global__ void sparseMatrixMulTensor(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
+	__global__ void sparseMatrixMulTensor1(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
+	__global__ void addMatrices(float *C, const float *CPart, const unsigned int n);
+}
+
+// Local constant to match main.cu's thread configuration
+constexpr unsigned int N_THREADS = 32;
 
 static const std::vector<std::string> patterns = {
 	"random",
