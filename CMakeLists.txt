@@ -1,16 +1,11 @@
 cmake_minimum_required(VERSION 3.30 FATAL_ERROR)
 
-# Ensure FetchContent uses the newer behavior (avoid FetchContent_Populate deprecation)
-if(POLICY CMP0169)
-    cmake_policy(SET CMP0169 NEW)
-endif()
-
 # set host compiler
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set CUDA architectures
-set(CMAKE_CUDA_ARCHITECTURES 53;60;70;75;80;86;89)
+set(CMAKE_CUDA_ARCHITECTURES 70;75;80;86;89)
 
 project(MatrixMultiplicationCUDA LANGUAGES CXX CUDA)
 
