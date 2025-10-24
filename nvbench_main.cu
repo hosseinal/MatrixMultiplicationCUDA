@@ -31,6 +31,7 @@
 // 'wmma::fragment' compiles correctly.
 using namespace nvcuda;
 namespace wmma = nvcuda::wmma;
+extern const int BLOCK_SIZE = 16;
 
 #include "Matrix.cuh"
 #include "CSRMatrix.cuh"
