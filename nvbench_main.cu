@@ -23,18 +23,14 @@
 // Include implementation so templates are available in this TU (quick solution)
 #include "matrix_generator.cpp"
 
-// Provide CEIL_DIV macro (used by some kernels) when this file is compiled
 #ifndef CEIL_DIV
 #define CEIL_DIV(_a, _b) (((_a) / (_b)) + (((_a) % (_b)) > 0 ? 1 : 0))
 #endif
-#define BLOCKSIZE 32
-extern const int BLOCK_SIZE = 16;
-constexpr unsigned int N_THREADS = 32
-
 // WMMA (tensor core) helpers live in namespace nvcuda::wmma; make the
-// nested namespace available as 'wmma' via the nvcuda namespace so code
-// using 'wmma::fragment' compiles correctly.
+// nested namespace available as 'wmma' via an alias so code using
+// 'wmma::fragment' compiles correctly.
 using namespace nvcuda;
+namespace wmma = nvcuda::wmma;
 
 #include "Matrix.cuh"
 #include "CSRMatrix.cuh"
