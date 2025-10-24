@@ -60,7 +60,6 @@ CPMAddPackage("gh:NVIDIA/nvbench#main")
 
 add_executable(matrix_multiplication_nvbench
     nvbench_main.cu
-    main.cu
     Matrix.cuh
     Matrix.cu
     CSRMatrix.cu
