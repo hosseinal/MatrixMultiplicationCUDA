@@ -23,6 +23,16 @@
 // Include implementation so templates are available in this TU (quick solution)
 #include "matrix_generator.cpp"
 
+// Provide CEIL_DIV macro (used by some kernels) when this file is compiled
+#ifndef CEIL_DIV
+#define CEIL_DIV(_a, _b) (((_a) / (_b)) + (((_a) % (_b)) > 0 ? 1 : 0))
+#endif
+
+// WMMA (tensor core) helpers live in namespace nvcuda::wmma; make the
+// nested namespace available as 'wmma' via the nvcuda namespace so code
+// using 'wmma::fragment' compiles correctly.
+using namespace nvcuda;
+
 #include "Matrix.cuh"
 #include "CSRMatrix.cuh"
 #include "BCSRMatrix.cuh"
@@ -94,21 +104,6 @@ __global__ void denseMatrixMulTensor(const half *d_A, const half *d_B,
 
     wmma::store_matrix_sync(d_C + warp_row * n + warp_col, c_frag, n,
                             wmma::mem_row_major);
-}
-__global__ void sparseMatrixMult1Co(const int *hdr, const int *idx,
-                                    const half *data, const half *B, float *C,
-                                    const unsigned int n) {
-    const unsigned int rowIdx = blockDim.y * blockIdx.y + threadIdx.y;
-    const unsigned int colIdx = blockDim.x * blockIdx.x + threadIdx.x;
-
-    if (rowIdx < n && colIdx < n) {
-        float tmp = 0.0f;
-        for (int k = hdr[rowIdx]; k < hdr[rowIdx + 1]; k++) {
-            tmp += __half2float(data[k]) * __half2float(
-                B[idx[k] * n + colIdx]);
-        }
-        C[rowIdx * n + colIdx] = tmp;
-    }
 }
 __global__ void sparseMatrixMult1Co(const int *hdr, const int *idx,
                                     const half *data, const half *B, float *C,
