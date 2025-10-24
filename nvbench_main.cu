@@ -26,14 +26,152 @@
 // emitted by nvcc with device linkage and C++ linkage; adding
 // extern "C" prevents the correct linkage and causes undefined
 // references at link time.
-__global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
-__global__ void denseMatrixMulTensor(const half *d_A, const half *d_B, float *d_C, const unsigned int n);
-__global__ void sparseMatrixMult1(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-__global__ void sparseMatrixMult1Co(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-__global__ void sparseMatrixMulTensor(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-__global__ void sparseMatrixMulTensor1(const int *hdr, const int *idx, const half *data, const half *B, float *C, const unsigned int n);
-__global__ void addMatrices(float *C, const float *CPart, const unsigned int n);
+__global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
+                               const unsigned int n) {
+    const unsigned int rowIdx = blockDim.y * blockIdx.y + threadIdx.y;
+    const unsigned int colIdx = blockDim.x * blockIdx.x + threadIdx.x;
 
+    // if (rowIdx < n && colIdx < n) {
+    //     float tmp = 0.0f;
+    //     for (int k = 0; k < n; k++) {
+    //         // Accumulate results for a single element
+    //         // There's no need here to use reduction  or atomic add, because this
+    //         // thread is the only one accessing this location
+    //         tmp += __half2float(d_A[rowIdx * n + k]) *
+    //                 __half2float(d_B[k * n + colIdx]);
+    //     }
+    //     d_C[rowIdx * n + colIdx] = tmp;
+    // }
+}
+
+__global__ void denseMatrixMulCo(const half *d_A, const half *d_B, float *d_C,
+                                 const unsigned int n) {
+    const unsigned int rowIdx = blockIdx.y *
+        CEIL_DIV(n, gridDim.y) + threadIdx.x / n;
+    const unsigned int colIdx = blockIdx.x * blockDim.x + threadIdx.x % n;
+
+    if (rowIdx < n && colIdx < n) {
+        float tmp = 0.0f;
+        for (int k = 0; k < n; k++) {
+            tmp += __half2float(d_A[rowIdx * n + k]) * __half2float(
+                d_B[k * n + colIdx]);
+        }
+        d_C[rowIdx * n + colIdx] = tmp;
+    }
+}
+__global__ void denseMatrixMulTensor(const half *d_A, const half *d_B,
+                                     float *d_C, const unsigned int n) {
+    // Calculate which 16x16 tile this thread block handles
+    const unsigned int warp_row = blockIdx.y * 16;
+    const unsigned int warp_col = blockIdx.x * 16;
+
+    if (warp_row >= n || warp_col >= n) return;
+
+    wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+    wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+
+    wmma::fill_fragment(c_frag, 0.0f);
+
+    // Accumulate over K dimension in 16x16 chunks
+    for (int k = 0; k < n; k += 16) {
+        wmma::load_matrix_sync(a_frag, d_A + warp_row * n + k, n);
+        wmma::load_matrix_sync(b_frag, d_B + k * n + warp_col, n);
+        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+    }
+
+    wmma::store_matrix_sync(d_C + warp_row * n + warp_col, c_frag, n,
+                            wmma::mem_row_major);
+}
+__global__ void sparseMatrixMult1Co(const int *hdr, const int *idx,
+                                    const half *data, const half *B, float *C,
+                                    const unsigned int n) {
+    const unsigned int rowIdx = blockDim.y * blockIdx.y + threadIdx.y;
+    const unsigned int colIdx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (rowIdx < n && colIdx < n) {
+        float tmp = 0.0f;
+        for (int k = hdr[rowIdx]; k < hdr[rowIdx + 1]; k++) {
+            tmp += __half2float(data[k]) * __half2float(
+                B[idx[k] * n + colIdx]);
+        }
+        C[rowIdx * n + colIdx] = tmp;
+    }
+}
+__global__ void sparseMatrixMult1Co(const int *hdr, const int *idx,
+                                    const half *data, const half *B, float *C,
+                                    const unsigned int n) {
+    const unsigned int rowIdx = blockDim.y * blockIdx.y + threadIdx.y;
+    const unsigned int colIdx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (rowIdx < n && colIdx < n) {
+        float tmp = 0.0f;
+        for (int k = hdr[rowIdx]; k < hdr[rowIdx + 1]; k++) {
+            tmp += __half2float(data[k]) * __half2float(
+                B[idx[k] * n + colIdx]);
+        }
+        C[rowIdx * n + colIdx] = tmp;
+    }
+}
+__global__ void sparseMatrixMulTensor(const int *hdr, const int *idx,
+                                      const half *data, const half *B,
+                                      float *C, const unsigned int n) {
+    const unsigned int warpRow = blockIdx.y * 16;
+    const unsigned int warpCol = blockIdx.x * 16;
+
+    if (warpRow >= n || warpCol >= n) return;
+
+    wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+    wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+
+    wmma::fill_fragment(c_frag, 0.0f);
+
+    for (int k = hdr[warpRow / 16]; k < hdr[warpRow / 16 + 1]; k++) {
+        wmma::load_matrix_sync(a_frag, data + k * 16 * 16, 16);
+        wmma::load_matrix_sync(b_frag, B + idx[k] * 16 * n + warpCol, n);
+        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+    }
+
+    wmma::store_matrix_sync(C + warpRow * n + warpCol, c_frag, n,
+                            wmma::mem_row_major);
+}
+
+__global__ void sparseMatrixMulTensor1(const int *hdr, const int *idx,
+                                      const half *data, const half *B,
+                                      float *C, const unsigned int n) {
+    const unsigned int warpRow = blockIdx.y * 16;
+    const unsigned int warpCol = blockIdx.x * 16;
+
+    if (warpRow >= n || warpCol >= n) return;
+
+    wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+    wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+
+    wmma::fill_fragment(c_frag, 0.0f);
+
+    wmma::fill_fragment(c_frag, 0.0f);
+
+#pragma unroll
+    for (int k = hdr[warpRow / 16]; k < hdr[warpRow / 16 + 1]; k++) {
+        wmma::load_matrix_sync(a_frag, data + k * 16 * 16, 16);
+        wmma::load_matrix_sync(b_frag, B + idx[k] * 16 * n + warpCol, n);
+        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+    }
+
+    wmma::store_matrix_sync(C + warpRow * n + warpCol, c_frag, n,
+                            wmma::mem_row_major);
+}
+__global__ void addMatrices(float *C, const float *CPart, const unsigned int n) {
+    const unsigned int rowIdx = blockIdx.y *
+        CEIL_DIV(n, gridDim.y) + threadIdx.x / n;
+    const unsigned int colIdx = blockIdx.x * blockDim.x + threadIdx.x % n;
+
+    if (rowIdx < n && colIdx < n) {
+        C[rowIdx * n + colIdx] += CPart[rowIdx * n + colIdx];
+    }
+}
 // Local constant to match main.cu's thread configuration
 constexpr unsigned int N_THREADS = 32;
 
@@ -142,12 +280,13 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 	// grid/block similar to main.cu naive kernel
 	dim3 gridSize{static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), 1};
 	dim3 blockSize{N_THREADS, N_THREADS, 1};
-
+    std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
 	state.add_element_count(static_cast<size_t>(N) * N);
 	state.exec([&](nvbench::launch &launch){
 		denseMatrixMul<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
 		cudaStreamSynchronize(launch.get_stream());
 	});
+    std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
 }
 
 // Benchmark: denseMatrixMulTensor (wmma)
