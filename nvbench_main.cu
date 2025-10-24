@@ -120,6 +120,21 @@ __global__ void sparseMatrixMult1Co(const int *hdr, const int *idx,
         C[rowIdx * n + colIdx] = tmp;
     }
 }
+
+__global__ void sparseMatrixMult1(const int *hdr, const int *idx,
+                                  const half *data, const half *B, float *C,
+                                  const unsigned int n) {
+    const unsigned int rowIdx = blockDim.y * blockIdx.y + threadIdx.y;
+    const unsigned int colIdx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (rowIdx < n && colIdx < n) {
+        for (int k = hdr[rowIdx]; k < hdr[rowIdx + 1]; k++) {
+            C[rowIdx * n + colIdx] += __half2float(data[k]) * __half2float(
+                B[idx[k] * n + colIdx]);
+        }
+    }
+}
+
 __global__ void sparseMatrixMulTensor(const int *hdr, const int *idx,
                                       const half *data, const half *B,
                                       float *C, const unsigned int n) {
