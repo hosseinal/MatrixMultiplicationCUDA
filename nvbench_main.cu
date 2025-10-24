@@ -27,6 +27,7 @@
 #ifndef CEIL_DIV
 #define CEIL_DIV(_a, _b) (((_a) / (_b)) + (((_a) % (_b)) > 0 ? 1 : 0))
 #endif
+#define BLOCKSIZE 32
 
 // WMMA (tensor core) helpers live in namespace nvcuda::wmma; make the
 // nested namespace available as 'wmma' via the nvcuda namespace so code
