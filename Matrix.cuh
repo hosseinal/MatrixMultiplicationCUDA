@@ -8,7 +8,6 @@ using namespace std;
 // Global project configuration constants
 // Inline constexpr gives external linkage and avoids multiple-definition
 // issues when included from many translation units.
-inline constexpr int BLOCK_SIZE = 16;
 
 class Matrix {
 public:
