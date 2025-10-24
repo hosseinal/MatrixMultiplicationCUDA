@@ -2,10 +2,22 @@
 #include <nvbench/nvbench.cuh>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
-#include <cublas_v2.h>
 #include <vector>
 #include <string>
 #include <memory>
+#include <cassert>
+
+#include <cassert>
+#include <iostream>
+#include <chrono>
+#include <sstream>
+#include <iomanip>
+#include <mma.h>
+#include <cublas_v2.h>
+#include <cusparse_v2.h>
+#include <algorithm>
+#include <cooperative_groups.h>
+#include <cuda/barrier>
 
 #include "matrix_generator.h"
 // Include implementation so templates are available in this TU (quick solution)
