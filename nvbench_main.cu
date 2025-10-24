@@ -53,17 +53,17 @@ __global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
     const unsigned int rowIdx = blockDim.y * blockIdx.y + threadIdx.y;
     const unsigned int colIdx = blockDim.x * blockIdx.x + threadIdx.x;
 
-    // if (rowIdx < n && colIdx < n) {
-    //     float tmp = 0.0f;
-    //     for (int k = 0; k < n; k++) {
-    //         // Accumulate results for a single element
-    //         // There's no need here to use reduction  or atomic add, because this
-    //         // thread is the only one accessing this location
-    //         tmp += __half2float(d_A[rowIdx * n + k]) *
-    //                 __half2float(d_B[k * n + colIdx]);
-    //     }
-    //     d_C[rowIdx * n + colIdx] = tmp;
-    // }
+    if (rowIdx < n && colIdx < n) {
+        float tmp = 0.0f;
+        for (int k = 0; k < n; k++) {
+            // Accumulate results for a single element
+            // There's no need here to use reduction  or atomic add, because this
+            // thread is the only one accessing this location
+            tmp += __half2float(d_A[rowIdx * n + k]) *
+                    __half2float(d_B[k * n + colIdx]);
+        }
+        d_C[rowIdx * n + colIdx] = tmp;
+    }
 }
 
 __global__ void denseMatrixMulCo(const half *d_A, const half *d_B, float *d_C,
@@ -285,13 +285,13 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 	const int patIdx = static_cast<int>(state.get_int64("PAT"));
 	const double spars = sparsP / 100.0;
 
-    std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
+    // std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
 
 	const std::string pattern = patterns.at(patIdx % patterns.size());
 
 	auto buf = prepare_buffers(N, spars, pattern);
 
-    std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
+    // std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
 
 	// Disable NVBench's blocking-kernel deadlock detector for this benchmark.
 	// The kernel launcher synchronizes the stream explicitly and we
@@ -302,13 +302,12 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 	// grid/block similar to main.cu naive kernel
 	dim3 gridSize{static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), 1};
 	dim3 blockSize{N_THREADS, N_THREADS, 1};
-    std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
+    // std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
 	state.add_element_count(static_cast<size_t>(N) * N);
 	state.exec([&](nvbench::launch &launch){
 		denseMatrixMul<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
-		// cudaStreamSynchronize(launch.get_stream());
 	});
-    std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
+    // std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
 } 
 
 // Benchmark: denseMatrixMulTensor (wmma)
@@ -328,7 +327,6 @@ static void bench_denseMatrixMulTensor(nvbench::state &state) {
 	state.add_element_count(static_cast<size_t>(N) * N);
 	state.exec([&](nvbench::launch &launch){
 		denseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
-		cudaStreamSynchronize(launch.get_stream());
 	});
 }
 
@@ -349,7 +347,6 @@ static void bench_sparseMatrixMult1(nvbench::state &state) {
 	state.add_element_count(static_cast<size_t>(N) * N);
 	state.exec([&](nvbench::launch &launch){
 		sparseMatrixMult1<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuCSRHdr, buf->gpuCSRIdx, buf->gpuCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
-		cudaStreamSynchronize(launch.get_stream());
 	});
 }
 
@@ -370,7 +367,6 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 	state.add_element_count(static_cast<size_t>(N) * N);
 	state.exec([&](nvbench::launch &launch){
 		sparseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
-		cudaStreamSynchronize(launch.get_stream());
 	});
 }
 
@@ -423,10 +419,10 @@ static void bench_cuBLAS_Tensor(nvbench::state &state) {
 
 // Register benches and axes
 NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 
 
