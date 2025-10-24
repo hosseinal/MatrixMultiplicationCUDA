@@ -297,7 +297,7 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 	// The kernel launcher synchronizes the stream explicitly and we
 	// prefer to disable the deadlock timeout rather than marking the exec
 	// as synchronous so measurements run uninterrupted.
-	state.set_blocking_kernel_timeout(-1);
+	// state.set_blocking_kernel_timeout(-1);
 
 	// grid/block similar to main.cu naive kernel
 	dim3 gridSize{static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), 1};
@@ -319,7 +319,7 @@ static void bench_denseMatrixMulTensor(nvbench::state &state) {
 	const std::string pattern = patterns.at(patIdx % patterns.size());
 
 	auto buf = prepare_buffers(N, spars, pattern);
-	state.set_blocking_kernel_timeout(-1);
+	// state.set_blocking_kernel_timeout(-1);
 
 	dim3 gridSize{static_cast<unsigned int>(N / 16), static_cast<unsigned int>(N / 16), 1};
 	dim3 blockSize{32, 1, 1};
@@ -339,7 +339,7 @@ static void bench_sparseMatrixMult1(nvbench::state &state) {
 	const std::string pattern = patterns.at(patIdx % patterns.size());
 
 	auto buf = prepare_buffers(N, spars, pattern);
-	state.set_blocking_kernel_timeout(-1);
+	// state.set_blocking_kernel_timeout(-1);
 
 	dim3 gridSize{static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), 1};
 	dim3 blockSize{N_THREADS, N_THREADS, 1};
@@ -359,7 +359,7 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 	const std::string pattern = patterns.at(patIdx % patterns.size());
 
 	auto buf = prepare_buffers(N, spars, pattern);
-	state.set_blocking_kernel_timeout(-1);
+	// state.set_blocking_kernel_timeout(-1);
 
 	dim3 gridSize{static_cast<unsigned int>(N / 16), static_cast<unsigned int>(N / 16), 1};
 	dim3 blockSize{32, 1, 1};
