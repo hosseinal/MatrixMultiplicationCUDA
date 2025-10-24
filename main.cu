@@ -134,17 +134,17 @@ __global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
     const unsigned int rowIdx = blockDim.y * blockIdx.y + threadIdx.y;
     const unsigned int colIdx = blockDim.x * blockIdx.x + threadIdx.x;
 
-    if (rowIdx < n && colIdx < n) {
-        float tmp = 0.0f;
-        for (int k = 0; k < n; k++) {
-            // Accumulate results for a single element
-            // There's no need here to use reduction  or atomic add, because this
-            // thread is the only one accessing this location
-            tmp += __half2float(d_A[rowIdx * n + k]) *
-                    __half2float(d_B[k * n + colIdx]);
-        }
-        d_C[rowIdx * n + colIdx] = tmp;
-    }
+    // if (rowIdx < n && colIdx < n) {
+    //     float tmp = 0.0f;
+    //     for (int k = 0; k < n; k++) {
+    //         // Accumulate results for a single element
+    //         // There's no need here to use reduction  or atomic add, because this
+    //         // thread is the only one accessing this location
+    //         tmp += __half2float(d_A[rowIdx * n + k]) *
+    //                 __half2float(d_B[k * n + colIdx]);
+    //     }
+    //     d_C[rowIdx * n + colIdx] = tmp;
+    // }
 }
 
 /**
