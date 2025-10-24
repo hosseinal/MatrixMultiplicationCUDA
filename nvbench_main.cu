@@ -305,10 +305,10 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 	state.add_element_count(static_cast<size_t>(N) * N);
 	state.exec([&](nvbench::launch &launch){
 		denseMatrixMul<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
-		cudaStreamSynchronize(launch.get_stream());
+		// cudaStreamSynchronize(launch.get_stream());
 	});
     std::cout << "Sparsity: " << spars << ", Pattern: " << patterns.at(patIdx % patterns.size()) << std::endl;
-}
+} 
 
 // Benchmark: denseMatrixMulTensor (wmma)
 static void bench_denseMatrixMulTensor(nvbench::state &state) {
