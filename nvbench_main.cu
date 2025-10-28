@@ -25,23 +25,20 @@
 
 #ifndef CEIL_DIV
 #define CEIL_DIV(_a, _b) (((_a) / (_b)) + (((_a) % (_b)) > 0 ? 1 : 0))
-#endif
-// WMMA (tensor core) helpers live in namespace nvcuda::wmma; make the
-// nested namespace available as 'wmma' via an alias so code using
-// 'wmma::fragment' compiles correctly.
-using namespace nvcuda;
-namespace wmma = nvcuda::wmma;
-extern const int BLOCK_SIZE = 16;
+// Dense matrix multiplication for rectangular A(MxN) * B(NxZ) = C(MxZ)
+__global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
+							   const unsigned int M, const unsigned int N, const unsigned int Z) {
+	const unsigned int rowIdx = blockDim.y * blockIdx.y + threadIdx.y;
+	const unsigned int colIdx = blockDim.x * blockIdx.x + threadIdx.x;
 
-#include "Matrix.cuh"
-#include "CSRMatrix.cuh"
-#include "BCSRMatrix.cuh"
-#include "HCSRMatrix.h"
-
-// The matrix generator provides mg::Matrix<T> as a templated alias.
-// We don't need to alias it here; the project's Matrix type is declared
-// in "Matrix.cuh" which is included below.
-
+	if (rowIdx < M && colIdx < Z) {
+		float tmp = 0.0f;
+		for (unsigned int k = 0; k < N; ++k) {
+			tmp += __half2float(d_A[rowIdx * N + k]) * __half2float(d_B[k * Z + colIdx]);
+		}
+		d_C[rowIdx * Z + colIdx] = tmp;
+	}
+}
 // Forward-declare kernels from main.cu so this translation unit can
 // call them as CUDA kernels. Signatures must match the definitions
 // in main.cu. Do NOT use extern "C" here — CUDA kernel symbols are
@@ -81,29 +78,43 @@ __global__ void denseMatrixMulCo(const half *d_A, const half *d_B, float *d_C,
         d_C[rowIdx * n + colIdx] = tmp;
     }
 }
+__global__ void denseMatrixMulCo(const half *d_A, const half *d_B, float *d_C,
+								 const unsigned int M, const unsigned int N, const unsigned int Z) {
+	const unsigned int rowIdx = blockIdx.y * blockDim.y + threadIdx.y;
+	const unsigned int colIdx = blockIdx.x * blockDim.x + threadIdx.x;
+
+	if (rowIdx < M && colIdx < Z) {
+		float tmp = 0.0f;
+		for (unsigned int k = 0; k < N; ++k) {
+			tmp += __half2float(d_A[rowIdx * N + k]) * __half2float(d_B[k * Z + colIdx]);
+		}
+		d_C[rowIdx * Z + colIdx] = tmp;
+	}
+}
+}
 __global__ void denseMatrixMulTensor(const half *d_A, const half *d_B,
-                                     float *d_C, const unsigned int n) {
-    // Calculate which 16x16 tile this thread block handles
-    const unsigned int warp_row = blockIdx.y * 16;
-    const unsigned int warp_col = blockIdx.x * 16;
+									 float *d_C, const unsigned int M, const unsigned int N, const unsigned int Z) {
+	// Calculate which 16x16 tile this thread block handles
+	const unsigned int warp_row = blockIdx.y * 16;
+	const unsigned int warp_col = blockIdx.x * 16;
 
-    if (warp_row >= n || warp_col >= n) return;
+	if (warp_row >= M || warp_col >= Z) return;
 
-    wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
-    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
-    wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+	wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+	wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+	wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
 
-    wmma::fill_fragment(c_frag, 0.0f);
+	wmma::fill_fragment(c_frag, 0.0f);
 
-    // Accumulate over K dimension in 16x16 chunks
-    for (int k = 0; k < n; k += 16) {
-        wmma::load_matrix_sync(a_frag, d_A + warp_row * n + k, n);
-        wmma::load_matrix_sync(b_frag, d_B + k * n + warp_col, n);
-        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
-    }
+	// Accumulate over K dimension in 16x16 chunks (N is inner dim)
+	for (unsigned int k = 0; k < N; k += 16) {
+		wmma::load_matrix_sync(a_frag, d_A + warp_row * N + k, N);
+		wmma::load_matrix_sync(b_frag, d_B + k * Z + warp_col, Z);
+		wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+	}
 
-    wmma::store_matrix_sync(d_C + warp_row * n + warp_col, c_frag, n,
-                            wmma::mem_row_major);
+	wmma::store_matrix_sync(d_C + warp_row * Z + warp_col, c_frag, Z,
+							wmma::mem_row_major);
 }
 __global__ void sparseMatrixMult1Co(const int *hdr, const int *idx,
                                     const half *data, const half *B, float *C,
@@ -245,14 +256,15 @@ struct GenDeviceBuffers {
 	}
 };
 
-static std::unique_ptr<GenDeviceBuffers> prepare_buffers(int N, double sparsity, const std::string &pattern) {
+static std::unique_ptr<GenDeviceBuffers> prepare_buffers(int M, int N, int Z, double sparsity, const std::string &pattern) {
 	auto out = std::make_unique<GenDeviceBuffers>();
 	// Generate float matrices with generator
-	auto genA = mg::generate_matrix<float>(N, N, sparsity, pattern, 16, 123);
-	auto genB = mg::generate_matrix<float>(N, N, 0.0, "random", 16, 456);
+	// A is M x N, B is N x Z (dense), C will be M x Z
+	auto genA = mg::generate_matrix<float>(M, N, sparsity, pattern, 16, 123);
+	auto genB = mg::generate_matrix<float>(N, Z, 0.0, "random", 16, 456);
 
-	out->matrixA = new Matrix(N, N);
-	out->matrixB = new Matrix(N, N);
+	out->matrixA = new Matrix(M, N);
+	out->matrixB = new Matrix(N, Z);
 	fill_Matrix_from_generated(*out->matrixA, genA);
 	fill_Matrix_from_generated(*out->matrixB, genB);
 
@@ -264,16 +276,17 @@ static std::unique_ptr<GenDeviceBuffers> prepare_buffers(int N, double sparsity,
 	out->bcsrA->copyToDevice(&out->gpuBCSRHdr, &out->gpuBCSRIdx, &out->gpuBCSRData);
 	out->csrA->copyToDevice(&out->gpuCSRHdr, &out->gpuCSRIdx, &out->gpuCSRData);
 
-	size_t bytes_half = static_cast<size_t>(N) * N * sizeof(half);
-	size_t bytes_float = static_cast<size_t>(N) * N * sizeof(float);
-	cudaMalloc(reinterpret_cast<void **>(&out->gpuA_half), bytes_half);
-	cudaMalloc(reinterpret_cast<void **>(&out->gpuB_half), bytes_half);
-	cudaMalloc(reinterpret_cast<void **>(&out->gpuC), bytes_float);
-	cudaMalloc(reinterpret_cast<void **>(&out->gpuCPart), bytes_float);
-	cudaMemcpy(out->gpuA_half, out->matrixA->data, bytes_half, cudaMemcpyHostToDevice);
-	cudaMemcpy(out->gpuB_half, out->matrixB->data, bytes_half, cudaMemcpyHostToDevice);
-	cudaMemset(out->gpuC, 0, bytes_float);
-	cudaMemset(out->gpuCPart, 0, bytes_float);
+	size_t bytes_half_A = static_cast<size_t>(M) * N * sizeof(half);
+	size_t bytes_half_B = static_cast<size_t>(N) * Z * sizeof(half);
+	size_t bytes_float_C = static_cast<size_t>(M) * Z * sizeof(float);
+	cudaMalloc(reinterpret_cast<void **>(&out->gpuA_half), bytes_half_A);
+	cudaMalloc(reinterpret_cast<void **>(&out->gpuB_half), bytes_half_B);
+	cudaMalloc(reinterpret_cast<void **>(&out->gpuC), bytes_float_C);
+	cudaMalloc(reinterpret_cast<void **>(&out->gpuCPart), bytes_float_C);
+	cudaMemcpy(out->gpuA_half, out->matrixA->data, bytes_half_A, cudaMemcpyHostToDevice);
+	cudaMemcpy(out->gpuB_half, out->matrixB->data, bytes_half_B, cudaMemcpyHostToDevice);
+	cudaMemset(out->gpuC, 0, bytes_float_C);
+	cudaMemset(out->gpuCPart, 0, bytes_float_C);
 
 	return out;
 }
