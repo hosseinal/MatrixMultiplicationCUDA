@@ -327,6 +327,8 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 	dim3 blockSize{N_THREADS, N_THREADS, 1};
 	state.add_element_count(static_cast<size_t>(M) * N);
 	state.exec([&](nvbench::launch &launch){
+		// clear output buffer for this iteration
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
 		denseMatrixMul<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(K), static_cast<unsigned int>(N));
 	});
 }
@@ -349,6 +351,8 @@ static void bench_denseMatrixMulTensor(nvbench::state &state) {
 
 	state.add_element_count(static_cast<size_t>(M) * N);
 	state.exec([&](nvbench::launch &launch){
+		// clear output buffer for this iteration
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
 		denseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(K), static_cast<unsigned int>(N));
 	});
 }
@@ -371,6 +375,8 @@ static void bench_sparseMatrixMult1(nvbench::state &state) {
 
 	state.add_element_count(static_cast<size_t>(M) * N);
 	state.exec([&](nvbench::launch &launch){
+		// clear output buffer for this iteration
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
 		sparseMatrixMult1<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuCSRHdr, buf->gpuCSRIdx, buf->gpuCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
 	});
 }
@@ -393,6 +399,8 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 
 	state.add_element_count(static_cast<size_t>(M) * N);
 	state.exec([&](nvbench::launch &launch){
+		// clear output buffer for this iteration
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
 		sparseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
 	});
 }
@@ -415,6 +423,8 @@ static void bench_cuBLAS(nvbench::state &state) {
 	constexpr float beta = 0.0f;
 	state.add_element_count(static_cast<size_t>(M) * N);
 	state.exec([&](nvbench::launch &launch){
+		// clear output buffer for this iteration
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
 		// cublasGemmEx parameters: (handle, transB, transA, m, n, k, ...)
 		// we keep previous ordering but adapt dimensions for MxK * KxN = MxN
 		cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, buf->gpuB_half, CUDA_R_16F, N, buf->gpuA_half, CUDA_R_16F, K, &beta, buf->gpuC, CUDA_R_32F, N, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
@@ -444,6 +454,8 @@ static void bench_cuBLAS_Tensor(nvbench::state &state) {
 
 	state.add_element_count(static_cast<size_t>(M) * N);
 	state.exec([&](nvbench::launch &launch){
+		// clear output buffer for this iteration
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
 		cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, buf->gpuB_half, CUDA_R_16F, N, buf->gpuA_half, CUDA_R_16F, K, &beta, buf->gpuC, CUDA_R_32F, N, CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 	});
 
