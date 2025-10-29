@@ -13,6 +13,7 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <cmath>
 #include <mma.h>
 #include <cublas_v2.h>
 #include <cusparse_v2.h>
@@ -239,6 +240,38 @@ static void fill_Matrix_from_generated(Matrix &dst, const std::vector<std::vecto
 	}
 }
 
+// Simple CPU reference matrix multiply: C = A * B
+static void cpu_matmul_ref(const Matrix *A, const Matrix *B, std::vector<float> &Cout) {
+	const int M = A->rows;
+	const int K = A->cols;
+	const int N = B->cols;
+	Cout.assign(static_cast<size_t>(M) * N, 0.0f);
+	for (int i = 0; i < M; ++i) {
+		for (int k = 0; k < K; ++k) {
+			float a = __half2float(A->data[i * K + k]);
+			for (int j = 0; j < N; ++j) {
+				Cout[static_cast<size_t>(i) * N + j] += a * __half2float(B->data[k * N + j]);
+			}
+		}
+	}
+}
+
+// Report summary helper (user-provided)
+void report_summary(nvbench::state& state)
+{
+	state.get_summary("nv/cold/time/gpu/min").remove_value("hide");
+	state.get_summary("nv/cold/time/gpu/max").remove_value("hide");
+	state.get_summary("nv/cold/time/gpu/mean").remove_value("hide");
+	//state.get_summary("nv/cold/time/gpu/mean").set_string("hide", "");
+	state.get_summary("nv/cold/time/cpu/mean").set_string("hide", "");
+	state.get_summary("nv/cold/time/cpu/min").set_string("hide", "");
+	state.get_summary("nv/cold/time/cpu/max").set_string("hide", "");
+	state.get_summary("nv/cold/time/cpu/stdev/relative").set_string("hide", "");
+	state.get_summary("nv/cold/sm_clock_rate/mean").remove_value("hide");
+	state.get_summary("nv/cold/sm_clock_rate/scaling/percent").remove_value("hide");
+
+}
+
 // Common generation + device copy helper
 struct GenDeviceBuffers {
 	Matrix *matrixA = nullptr;
@@ -326,11 +359,30 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 	dim3 gridSize{static_cast<unsigned int>(N / N_THREADS + (N % N_THREADS > 0 ? 1 : 0)), static_cast<unsigned int>(M / N_THREADS + (M % N_THREADS > 0 ? 1 : 0)), 1};
 	dim3 blockSize{N_THREADS, N_THREADS, 1};
 	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec([&](nvbench::launch &launch){
-		// clear output buffer for this iteration
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		// clear output buffer for this iteration on the launch stream
 		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		// start timer
+		timer.start();
 		denseMatrixMul<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(K), static_cast<unsigned int>(N));
+		// stop timer
+		timer.stop();
 	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::abort();
+			}
+		}
+	}
 }
 
 // Benchmark: denseMatrixMulTensor (wmma)
@@ -350,11 +402,30 @@ static void bench_denseMatrixMulTensor(nvbench::state &state) {
 	dim3 blockSize{32, 1, 1};
 
 	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec([&](nvbench::launch &launch){
-		// clear output buffer for this iteration
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		// clear output buffer for this iteration on the launch stream
 		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		// start timer
+		timer.start();
 		denseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuA_half, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(K), static_cast<unsigned int>(N));
+		// stop timer
+		timer.stop();
 	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::abort();
+			}
+		}
+	}
 }
 
 // Benchmark: sparseMatrixMult1
@@ -374,11 +445,30 @@ static void bench_sparseMatrixMult1(nvbench::state &state) {
 	dim3 blockSize{N_THREADS, N_THREADS, 1};
 
 	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec([&](nvbench::launch &launch){
-		// clear output buffer for this iteration
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		// clear output buffer for this iteration on the launch stream
 		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		// start timer
+		timer.start();
 		sparseMatrixMult1<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuCSRHdr, buf->gpuCSRIdx, buf->gpuCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
+		// stop timer
+		timer.stop();
 	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::abort();
+			}
+		}
+	}
 }
 
 // Benchmark: sparseMatrixMulTensor (BCSR tensor)
@@ -398,11 +488,30 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 	dim3 blockSize{32, 1, 1};
 
 	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec([&](nvbench::launch &launch){
-		// clear output buffer for this iteration
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		// clear output buffer for this iteration on the launch stream
 		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		// start timer
+		timer.start();
 		sparseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
+		// stop timer
+		timer.stop();
 	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::abort();
+			}
+		}
+	}
 }
 
 // Benchmark: cuBLAS (GEMM) - no tensor ops
@@ -422,13 +531,34 @@ static void bench_cuBLAS(nvbench::state &state) {
 	constexpr float alpha = 1.0f;
 	constexpr float beta = 0.0f;
 	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec([&](nvbench::launch &launch){
-		// clear output buffer for this iteration
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		// ensure cuBLAS uses the same stream as the launch
+		cublasSetStream(handle, launch.get_stream());
+		// clear output buffer for this iteration on the launch stream
 		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		// start timer
+		timer.start();
 		// cublasGemmEx parameters: (handle, transB, transA, m, n, k, ...)
 		// we keep previous ordering but adapt dimensions for MxK * KxN = MxN
 		cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, buf->gpuB_half, CUDA_R_16F, N, buf->gpuA_half, CUDA_R_16F, K, &beta, buf->gpuC, CUDA_R_32F, N, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+		// stop timer
+		timer.stop();
 	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::abort();
+			}
+		}
+	}
 	cublasDestroy(handle);
 }
 
@@ -458,6 +588,21 @@ static void bench_cuBLAS_Tensor(nvbench::state &state) {
 		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
 		cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, buf->gpuB_half, CUDA_R_16F, N, buf->gpuA_half, CUDA_R_16F, K, &beta, buf->gpuC, CUDA_R_32F, N, CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::abort();
+			}
+		}
+	}
 
 	cublasDestroy(handle);
 }
