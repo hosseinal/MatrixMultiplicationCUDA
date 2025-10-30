@@ -518,7 +518,7 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 	dim3 blockSize{32, 1, 1};
 
 	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec([&](nvbench::launch &launch, auto &timer){
+	state.exec([&](nvbench::launch& launch){
 		// clear output buffer for this iteration on the launch stream		
 		sparseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(N));
 		// stop timer
