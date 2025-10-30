@@ -160,27 +160,32 @@ __global__ void sparseMatrixMult1(const int *hdr, const int *idx,
 }
 
 __global__ void sparseMatrixMulTensor(const int *hdr, const int *idx,
-                                      const half *data, const half *B,
-                                      float *C, const unsigned int n) {
-    const unsigned int warpRow = blockIdx.x * 16;
-    const unsigned int warpCol = blockIdx.y * 16;
+									  const half *data, const half *B,
+									  float *C, const unsigned int M, const unsigned int N) {
+	// warpRow: starting row index (based on blockIdx.y), warpCol: starting col index (based on blockIdx.x)
+	const unsigned int warpRow = blockIdx.y * 16;
+	const unsigned int warpCol = blockIdx.x * 16;
 
-    if (warpRow >= n || warpCol >= n) return;
+	// Bounds check against the output matrix dimensions (M rows, N cols)
+	if (warpRow >= M || warpCol >= N) return;
 
-    wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
-    wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
-    wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+	wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+	wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+	wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
 
-    wmma::fill_fragment(c_frag, 0.0f);
+	wmma::fill_fragment(c_frag, 0.0f);
 
-    for (int k = hdr[warpRow / 16]; k < hdr[warpRow / 16 + 1]; k++) {
-        wmma::load_matrix_sync(a_frag, data + k * 16 * 16, 16);
-        wmma::load_matrix_sync(b_frag, B + idx[k] * 16 * n + warpCol, n);
-        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
-    }
+	// hdr indexes blocks per block-row; warpRow/16 gives the block-row index
+	for (int k = hdr[warpRow / 16]; k < hdr[warpRow / 16 + 1]; k++) {
+		// load A block (16x16) and corresponding B tile; B leading dimension is N (number of columns)
+		wmma::load_matrix_sync(a_frag, data + k * 16 * 16, 16);
+		wmma::load_matrix_sync(b_frag, B + idx[k] * 16 * N + warpCol, N);
+		wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+	}
 
-    wmma::store_matrix_sync(C + warpRow * n + warpCol, c_frag, n,
-                            wmma::mem_row_major);
+	// store result into C with leading dimension N
+	wmma::store_matrix_sync(C + warpRow * N + warpCol, c_frag, N,
+							wmma::mem_row_major);
 }
 
 __global__ void sparseMatrixMulTensor1(const int *hdr, const int *idx,
@@ -508,7 +513,7 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
 		// start timer
 		timer.start();
-		sparseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(N));
+		sparseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(N));
 		// stop timer
 		timer.stop();
 	});
