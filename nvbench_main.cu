@@ -504,24 +504,17 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 	auto buf = prepare_buffers(M, K, N, spars, pattern);
 	// state.set_blocking_kernel_timeout(-1);
 
-    // Print host BCSR representation of A for debugging/inspection
-	std::cout << "=== BCSR (host) for matrix A ===\n";
-	if (buf->bcsrA) {
-		buf->bcsrA->print();
-		std::cout << std::endl;
-	} else {
-		std::cout << "BCSR representation not available" << std::endl;
-	}
-
 	// grid.x corresponds to tile columns (N), grid.y to tile rows (M) — match denseMatrixMulTensor
 	dim3 gridSize{static_cast<unsigned int>((N + 15) / 16), static_cast<unsigned int>((M + 15) / 16), 1};
 	dim3 blockSize{32, 1, 1};
 
 	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec([&](nvbench::launch& launch){
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
 		// clear output buffer for this iteration on the launch stream		
+        timer.start();
 		sparseMatrixMulTensor<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(N));
 		// stop timer
+        timer.stop();
 	});
 
 	// copy result back and verify on CPU
@@ -539,6 +532,8 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 		}
 	}
 
+    // report summary tweaks
+    report_summary(state);
     
 }
 
