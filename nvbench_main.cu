@@ -394,6 +394,9 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 			}
 		}
 	}
+
+	// report summary tweaks
+	report_summary(state);
 }
 
 // Benchmark: denseMatrixMulTensor (wmma)
@@ -437,6 +440,9 @@ static void bench_denseMatrixMulTensor(nvbench::state &state) {
 			}
 		}
 	}
+
+	// report summary tweaks
+	report_summary(state);
 }
 
 // Benchmark: sparseMatrixMult1
@@ -480,6 +486,9 @@ static void bench_sparseMatrixMult1(nvbench::state &state) {
 			}
 		}
 	}
+
+	// report summary tweaks
+	report_summary(state);
 }
 
 // Benchmark: sparseMatrixMulTensor (BCSR tensor)
@@ -533,6 +542,8 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 			}
 		}
 	}
+
+    
 }
 
 // Benchmark: cuBLAS (GEMM) - no tensor ops
@@ -580,7 +591,9 @@ static void bench_cuBLAS(nvbench::state &state) {
 			}
 		}
 	}
-	cublasDestroy(handle);
+    cublasDestroy(handle);
+	// report summary tweaks
+	report_summary(state);
 }
 
 // Benchmark: cuBLAS with Tensor Cores
@@ -630,8 +643,10 @@ static void bench_cuBLAS_Tensor(nvbench::state &state) {
 			}
 		}
 	}
-
 	cublasDestroy(handle);
+
+    // report summary tweaks
+	report_summary(state);
 }
 
 
