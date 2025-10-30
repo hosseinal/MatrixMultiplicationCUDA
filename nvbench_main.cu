@@ -162,8 +162,8 @@ __global__ void sparseMatrixMult1(const int *hdr, const int *idx,
 __global__ void sparseMatrixMulTensor(const int *hdr, const int *idx,
                                       const half *data, const half *B,
                                       float *C, const unsigned int n) {
-    const unsigned int warpRow = blockIdx.y * 16;
-    const unsigned int warpCol = blockIdx.x * 16;
+    const unsigned int warpRow = blockIdx.x * 16;
+    const unsigned int warpCol = blockIdx.y * 16;
 
     if (warpRow >= n || warpCol >= n) return;
 
@@ -499,7 +499,7 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 		std::cout << "BCSR representation not available" << std::endl;
 	}
 
-	dim3 gridSize{static_cast<unsigned int>((N + 15) / 16), static_cast<unsigned int>((M + 15) / 16), 1};
+	dim3 gridSize{static_cast<unsigned int>((M + 15) / 16), static_cast<unsigned int>((N + 15) / 16), 1};
 	dim3 blockSize{32, 1, 1};
 
 	state.add_element_count(static_cast<size_t>(M) * N);
@@ -633,7 +633,7 @@ static void bench_cuBLAS_Tensor(nvbench::state &state) {
 // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {32}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 
