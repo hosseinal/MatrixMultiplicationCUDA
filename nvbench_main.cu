@@ -354,14 +354,6 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 
 	auto buf = prepare_buffers(M, K, N, spars, pattern);
 
-	// Print host BCSR representation of A for debugging/inspection
-	std::cout << "=== BCSR (host) for matrix A ===\n";
-	if (buf->bcsrA) {
-		buf->bcsrA->print();
-		std::cout << std::endl;
-	} else {
-		std::cout << "BCSR representation not available" << std::endl;
-	}
 
 	// Disable NVBench's blocking-kernel deadlock detector for this benchmark.
 	// The kernel launcher synchronizes the stream explicitly and we
@@ -497,6 +489,15 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 
 	auto buf = prepare_buffers(M, K, N, spars, pattern);
 	// state.set_blocking_kernel_timeout(-1);
+
+    // Print host BCSR representation of A for debugging/inspection
+	std::cout << "=== BCSR (host) for matrix A ===\n";
+	if (buf->bcsrA) {
+		buf->bcsrA->print();
+		std::cout << std::endl;
+	} else {
+		std::cout << "BCSR representation not available" << std::endl;
+	}
 
 	dim3 gridSize{static_cast<unsigned int>((N + 15) / 16), static_cast<unsigned int>((M + 15) / 16), 1};
 	dim3 blockSize{32, 1, 1};
