@@ -25,6 +25,10 @@
 // Include implementation so templates are available in this TU (quick solution)
 #include "matrix_generator.cpp"
 
+
+using namespace std;
+using namespace nvcuda;
+
 #ifndef CEIL_DIV
 #define CEIL_DIV(_a, _b) (((_a) / (_b)) + (((_a) % (_b)) > 0 ? 1 : 0))
 #endif
