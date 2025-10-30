@@ -277,8 +277,8 @@ void report_summary(nvbench::state& state)
 	state.get_summary("nv/cold/time/cpu/min").set_string("hide", "");
 	state.get_summary("nv/cold/time/cpu/max").set_string("hide", "");
 	state.get_summary("nv/cold/time/cpu/stdev/relative").set_string("hide", "");
-	state.get_summary("nv/cold/sm_clock_rate/mean").remove_value("hide");
-	state.get_summary("nv/cold/sm_clock_rate/scaling/percent").remove_value("hide");
+	// state.get_summary("nv/cold/sm_clock_rate/mean").remove_value("hide");
+	// state.get_summary("nv/cold/sm_clock_rate/scaling/percent").remove_value("hide");
 
 }
 
