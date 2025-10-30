@@ -41,7 +41,9 @@ __global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
 		}
 		d_C[rowIdx * Z + colIdx] = tmp;
 	}
+
 }
+
 // Forward-declare kernels from main.cu so this translation unit can
 // call them as CUDA kernels. Signatures must match the definitions
 // in main.cu. Do NOT use extern "C" here — CUDA kernel symbols are
@@ -64,7 +66,7 @@ __global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
         }
         d_C[rowIdx * n + colIdx] = tmp;
     }
-
+	}
 __global__ void denseMatrixMulCo(const half *d_A, const half *d_B, float *d_C,
                                  const unsigned int n) {
     const unsigned int rowIdx = blockIdx.y *
@@ -216,17 +218,6 @@ static const std::vector<std::string> patterns = {
 	"diagonal",
 	"blockdiagonal",
 	"blockrandom"
-};
-
-// Explicit (M, K) pairs — one pair per line as requested
-static const std::vector<std::pair<int,int>> mk_pairs = {
-	{1024, 256},
-	{512, 2048},
-	{512, 4608},
-	{256, 1024},
-	{512, 256},
-	{2048, 1024},
-	{512, 512}
 };
 
 // Helper: fill project Matrix from generated float matrix
