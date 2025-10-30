@@ -95,7 +95,7 @@ __global__ void denseMatrixMulCo(const half *d_A, const half *d_B, float *d_C,
 		d_C[rowIdx * Z + colIdx] = tmp;
 	}
 }
-}
+
 __global__ void denseMatrixMulTensor(const half *d_A, const half *d_B,
 									 float *d_C, const unsigned int M, const unsigned int N, const unsigned int Z) {
 	// Calculate which 16x16 tile this thread block handles
