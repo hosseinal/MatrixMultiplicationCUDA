@@ -24,6 +24,10 @@
 #include "matrix_generator.h"
 // Include implementation so templates are available in this TU (quick solution)
 #include "matrix_generator.cpp"
+// Matrix/CSR/BCSR types
+#include "Matrix.cuh"
+#include "CSRMatrix.cuh"
+#include "BCSRMatrix.cuh"
 
 
 using namespace std;
