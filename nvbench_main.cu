@@ -30,6 +30,7 @@
 #include "BCSRMatrix.cuh"
 
 
+
 using namespace std;
 using namespace nvcuda;
 
@@ -219,6 +220,11 @@ __global__ void addMatrices(float *C, const float *CPart, const unsigned int n) 
 }
 // Local constant to match main.cu's thread configuration
 constexpr unsigned int N_THREADS = 32;
+
+// Provide BLOCK_SIZE definition for translation units that expect it.
+// main.cu defines this for the application; nvbench builds a separate TU so
+// we define it here as well to satisfy references in BCSR/CSR helper files.
+const int BLOCK_SIZE = 16;
 
 static const std::vector<std::string> patterns = {
 	"random",
