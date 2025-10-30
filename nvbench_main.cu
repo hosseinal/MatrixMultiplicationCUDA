@@ -27,6 +27,7 @@
 
 #ifndef CEIL_DIV
 #define CEIL_DIV(_a, _b) (((_a) / (_b)) + (((_a) % (_b)) > 0 ? 1 : 0))
+#endif
 // Dense matrix multiplication for rectangular A(MxN) * B(NxZ) = C(MxZ)
 __global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
 							   const unsigned int M, const unsigned int N, const unsigned int Z) {
@@ -63,7 +64,6 @@ __global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
         }
         d_C[rowIdx * n + colIdx] = tmp;
     }
-}
 
 __global__ void denseMatrixMulCo(const half *d_A, const half *d_B, float *d_C,
                                  const unsigned int n) {
@@ -583,10 +583,16 @@ static void bench_cuBLAS_Tensor(nvbench::state &state) {
 	cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, buf->gpuB_half, CUDA_R_16F, N, buf->gpuA_half, CUDA_R_16F, K, &beta, buf->gpuC, CUDA_R_32F, N, CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 
 	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec([&](nvbench::launch &launch){
-		// clear output buffer for this iteration
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		// ensure cuBLAS uses the same stream as the launch
+		cublasSetStream(handle, launch.get_stream());
+		// clear output buffer for this iteration on the launch stream
 		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		// start timer
+		timer.start();
 		cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, buf->gpuB_half, CUDA_R_16F, N, buf->gpuA_half, CUDA_R_16F, K, &beta, buf->gpuC, CUDA_R_32F, N, CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+		// stop timer
+		timer.stop();
 	});
 
 	// copy result back and verify on CPU
