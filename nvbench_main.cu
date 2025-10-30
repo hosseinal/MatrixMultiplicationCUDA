@@ -504,7 +504,8 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 		std::cout << "BCSR representation not available" << std::endl;
 	}
 
-	dim3 gridSize{static_cast<unsigned int>((M + 15) / 16), static_cast<unsigned int>((N + 15) / 16), 1};
+	// grid.x corresponds to tile columns (N), grid.y to tile rows (M) — match denseMatrixMulTensor
+	dim3 gridSize{static_cast<unsigned int>((N + 15) / 16), static_cast<unsigned int>((M + 15) / 16), 1};
 	dim3 blockSize{32, 1, 1};
 
 	state.add_element_count(static_cast<size_t>(M) * N);
