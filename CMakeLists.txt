@@ -4,8 +4,12 @@ cmake_minimum_required(VERSION 3.30 FATAL_ERROR)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Set CUDA architectures
-set(CMAKE_CUDA_ARCHITECTURES 70;75;80;86;89)
+# Set CUDA architectures (override by passing -DCMAKE_CUDA_ARCHITECTURES="..." to cmake)
+# Note: some older CUDA toolkits / nvcc do not recognize very recent SM targets
+# (e.g. compute_89). Set a conservative default here and allow users to override it.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 70 75 80 86)
+endif()
 
 project(MatrixMultiplicationCUDA LANGUAGES CXX CUDA)
 
