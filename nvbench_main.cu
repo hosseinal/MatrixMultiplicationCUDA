@@ -157,6 +157,7 @@ __global__ void sparseMatrixMult1(const int *hdr, const int *idx,
                 B[idx[k] * n + colIdx]);
         }
     }
+
 }
 
 __global__ void sparseMatrixMulTensor(const int *hdr, const int *idx,
@@ -167,38 +168,7 @@ __global__ void sparseMatrixMulTensor(const int *hdr, const int *idx,
 	const unsigned int warpCol = blockIdx.x * 16;
 
 	// Bounds check against the output matrix dimensions (M rows, N cols)
-	if (warpRow >= M || warpCol >= N) return;
-
-	wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
-	wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
-	wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
-
-	wmma::fill_fragment(c_frag, 0.0f);
-
-	// hdr indexes blocks per block-row; warpRow/16 gives the block-row index
-	for (int k = hdr[warpRow / 16]; k < hdr[warpRow / 16 + 1]; k++) {
-		// load A block (16x16) and corresponding B tile; B leading dimension is N (number of columns)
-		wmma::load_matrix_sync(a_frag, data + k * 16 * 16, 16);
-		wmma::load_matrix_sync(b_frag, B + idx[k] * 16 * N + warpCol, N);
-		wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
-	}
-
-	// store result into C with leading dimension N
-	wmma::store_matrix_sync(C + warpRow * N + warpCol, c_frag, N,
-							wmma::mem_row_major);
-}
-
-
-
-_global__ void sparseMatrixMulTensor(const int *hdr, const int *idx,
-									  const half *data, const half *B,
-									  float *C, const unsigned int M, const unsigned int N) {
-	// warpRow: starting row index (based on blockIdx.y), warpCol: starting col index (based on blockIdx.x)
-	const unsigned int warpRow = blockIdx.y * 16;
-	const unsigned int warpCol = blockIdx.x * 16;
-
-	// Bounds check against the output matrix dimensions (M rows, N cols)
-	if (warpRow >= M || warpCol >= N) return;
+	if (warpRow >= M || warpCol >= N) return; // Ensure we don't access out of bounds
 
 	wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
 	wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
@@ -792,17 +762,17 @@ static void bench_cuBLAS_Tensor(nvbench::state &state) {
 NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
 // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
-NVBench_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
 
 
 // // Register benches and axes
 // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 
 // // // // size 512 * 2048
 // // // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
