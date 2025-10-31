@@ -879,7 +879,13 @@ static void bench_sparseMatrixMulTensor_v1_improved(nvbench::state &state) {
 		}
 	}
 
-	report_summary(state);
+	state.get_summary("nv/cold/time/gpu/min").remove_value("hide");
+    state.get_summary("nv/cold/time/gpu/max").remove_value("hide");
+    state.get_summary("nv/cold/time/gpu/mean").remove_value("hide");
+    state.get_summary("nv/cold/time/cpu/mean").remove_value("hide");
+    state.get_summary("nv/cold/time/cpu/min").remove_value("hide");
+    state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
+}
 }
 
 // Benchmark: cuBLAS (GEMM) - no tensor ops
