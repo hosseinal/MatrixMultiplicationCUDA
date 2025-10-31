@@ -776,7 +776,6 @@ static void bench_sparseMatrixMulTensor_v3(nvbench::state &state) {
       state.get_summary("nv/cold/time/cpu/min").remove_value("hide");
       state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
 }
-}
 
 // Benchmark: cuBLAS (GEMM) - no tensor ops
 static void bench_cuBLAS(nvbench::state &state) {
