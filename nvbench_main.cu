@@ -142,46 +142,28 @@ __global__ void sparseMatrixMulTensor_option2_ldmatrix_sm80(const int *hdr, cons
 		const unsigned int tileCol = tileColBase + warpId * 16;
 		if (tileCol >= N) { __syncthreads(); continue; }
 
-		// Use PTX ldmatrix to load A 8x8 subtiles from shared memory into registers
-		// and then issue mma.sync to perform the 16x16x16 multiply. This is a
-		// compact illustrative sequence and may require tuning.
-
-		// Load two 8x8 subtiles for the 16x16 A tile
-		uint32_t a0, a1, a2, a3, a4, a5, a6, a7;
-		unsigned char *sA_bytes = reinterpret_cast<unsigned char*>(sA);
-		// PTX ldmatrix expects 32-bit shared-memory addresses/offsets when
-		// used from inline asm. Cast the shared pointer to a 32-bit offset
-		// (uintptr_t -> uint32_t) to satisfy the asm constraint and avoid
-		// operand-size mismatch errors on 64-bit hosts.
-		uint32_t sA_off = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(sA_bytes));
-		uint32_t sA_off2 = sA_off + static_cast<uint32_t>(8 * sizeof(uint16_t));
-		asm volatile(
-			"ldmatrix.sync.aligned.m8n8.x4.shared {%0, %1, %2, %3}, [%8];\n"
-			"ldmatrix.sync.aligned.m8n8.x4.shared {%4, %5, %6, %7}, [%9];\n"
-			: "=r"(a0), "=r"(a1), "=r"(a2), "=r"(a3), "=r"(a4), "=r"(a5), "=r"(a6), "=r"(a7)
-			: "r"(sA_off), "r"(sA_off2)
-		);
-
-		// Load B tile into a WMMA fragment (we'll then attempt to use PTX mma)
+		// Load A block from shared memory into a WMMA fragment and use the
+		// WMMA API to perform the 16x16x16 multiply. This is a portable and
+		// robust fallback in place of raw PTX `ldmatrix`/`mma.sync`.
+		wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
 		wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+		wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag_tmp;
+
+		wmma::fill_fragment(c_frag_tmp, 0.0f);
+
+		// Load A from shared memory (sA contains the 16x16 A block)
+		wmma::load_matrix_sync(a_frag, sA, 16);
+
+		// Load B tile from global memory as before
 		wmma::load_matrix_sync(b_frag, B + static_cast<size_t>(idx[k]) * 16 * static_cast<size_t>(N) + tileCol, N);
 
-	// Extract a small view of b_frag into 32-bit registers (placeholder)
-	// We only keep b0 here to use in the illustrative mma.sync below.
-	uint32_t b0 = 0;
+		// Perform WMMA multiply-accumulate
+		wmma::mma_sync(c_frag_tmp, a_frag, b_frag, c_frag_tmp);
 
-		// Attempt a single mma.sync PTX to multiply an A-subtile and B-subtile
-		// into a float accumulator. This is a simplified example and may not
-		// map directly to a full 16x16 mma sequence.
-		float out0 = 0.0f;
-		asm volatile(
-			"mma.sync.aligned.m16n8k16.f32.f16 %0, %1, %2, %3;\n"
-			: "=f"(out0)
-			: "r"(a0), "r"(b0), "f"(out0)
-		);
-
-		// Accumulate result into local accumulator (naive placement)
-		c_acc[0] += out0;
+		// Write temporary accumulator into a small float array and fold into c_acc
+		float tmp_c[16];
+		wmma::store_matrix_sync(tmp_c, c_frag_tmp, 16, wmma::mem_row_major);
+		for (int t = 0; t < 16; ++t) c_acc[t] += tmp_c[t];
 
 		__syncthreads();
 	}
