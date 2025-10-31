@@ -53,6 +53,65 @@ __global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
 
 }
 
+// Improved v1 variant: cooperative A staging, unified warp path, reduced divergence,
+// size-safe offsets and restrict qualifiers. This keeps the same block layout as v2
+// (64 threads, two 16x16 tiles per block horizontally). It uses WMMA for full
+// tiles; partial-tile handling remains the caller's responsibility (same as v2).
+__global__ void sparseMatrixMulTensor_v1_improved(const int * __restrict__ hdr, const int * __restrict__ idx,
+												  const half * __restrict__ data, const half * __restrict__ B,
+												  float * __restrict__ C, const unsigned int M, const unsigned int N) {
+	const unsigned int warpRow = blockIdx.y * 16u;
+	const unsigned int tileColBase = blockIdx.x * 32u; // covers 32 columns per block
+
+	if (warpRow >= M || tileColBase >= N) return;
+
+	const unsigned int warpId = threadIdx.x / 32u; // 0 or 1
+	const unsigned int laneId = threadIdx.x & 31u;
+
+	extern __shared__ half sA[]; // 16*16 elements (256)
+
+	wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+	wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+	wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+	wmma::fill_fragment(c_frag, 0.0f);
+
+	const int blockRowIdx = static_cast<int>(warpRow / 16u);
+
+	// Iterate non-zero blocks in this block-row
+	for (int k = hdr[blockRowIdx]; k < hdr[blockRowIdx + 1]; ++k) {
+		// Global pointer to A block (16x16 contiguous)
+		const half *a_global = data + static_cast<size_t>(k) * 16u * 16u;
+
+		// Cooperative load of 16*16 half elements into shared memory
+		for (unsigned int i = threadIdx.x; i < 16u * 16u; i += blockDim.x) {
+			sA[i] = a_global[i];
+		}
+		__syncthreads();
+
+		// Compute tile column for this warp (both warps follow same path)
+		const unsigned int tileCol = tileColBase + warpId * 16u;
+		if (tileCol >= N) {
+			__syncthreads();
+			continue;
+		}
+
+		// Load A from shared memory (leading dim 16) and B from global memory
+		wmma::load_matrix_sync(a_frag, sA, 16);
+		const size_t b_offset = static_cast<size_t>(idx[k]) * 16u * static_cast<size_t>(N) + static_cast<size_t>(tileCol);
+		wmma::load_matrix_sync(b_frag, B + b_offset, N);
+		wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+
+		__syncthreads();
+	}
+
+	// store results for this warp's tile
+	const unsigned int outCol = tileColBase + warpId * 16u;
+	if (outCol < N) {
+		const size_t out_offset = static_cast<size_t>(warpRow) * static_cast<size_t>(N) + static_cast<size_t>(outCol);
+		wmma::store_matrix_sync(C + out_offset, c_frag, N, wmma::mem_row_major);
+	}
+}
+
 // Forward-declare kernels from main.cu so this translation unit can
 // call them as CUDA kernels. Signatures must match the definitions
 // in main.cu. Do NOT use extern "C" here — CUDA kernel symbols are
@@ -777,6 +836,52 @@ static void bench_sparseMatrixMulTensor_v3(nvbench::state &state) {
       state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
 }
 
+// Benchmark: sparseMatrixMulTensor_v1_improved
+static void bench_sparseMatrixMulTensor_v1_improved(nvbench::state &state) {
+	const int M = static_cast<int>(state.get_int64("M"));
+	const int K = static_cast<int>(state.get_int64("K"));
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
+
+	auto buf = prepare_buffers(M, K, N, spars, pattern);
+
+	dim3 gridSize{static_cast<unsigned int>((N + 31) / 32), static_cast<unsigned int>((M + 15) / 16), 1};
+	dim3 blockSize{64, 1, 1};
+
+	const unsigned int sharedBytes = static_cast<unsigned int>(16 * 16 * sizeof(half));
+
+	state.add_element_count(static_cast<size_t>(M) * N);
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		// clear output buffer for this iteration on the launch stream
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		// start timer
+		timer.start();
+		sparseMatrixMulTensor_v1_improved<<<gridSize, blockSize, sharedBytes, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(N));
+		// stop timer
+		timer.stop();
+	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::abort();
+			}
+		}
+	}
+
+	report_summary(state);
+}
+
 // Benchmark: cuBLAS (GEMM) - no tensor ops
 static void bench_cuBLAS(nvbench::state &state) {
 	const int M = static_cast<int>(state.get_int64("M"));
@@ -890,6 +995,7 @@ NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add
 // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v1_improved).set_name("sparseMatrixMulTensor_v1_improved").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
 
 
 // // Register benches and axes
