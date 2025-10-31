@@ -278,6 +278,78 @@ __global__ void sparseMatrixMulTensor_v2(const int *hdr, const int *idx,
 	}
 }
 
+// Variant v3: same as v2 but first stages the A 16x16 block into shared memory
+// so both warps can load A from fast on-chip memory. The shared memory buffer
+// size required per block is 16*16 half elements (256 * sizeof(half)). The
+// benchmark must specify shared mem when launching this kernel.
+__global__ void sparseMatrixMulTensor_v3(const int *hdr, const int *idx,
+										 const half *data, const half *B,
+										 float *C, const unsigned int M, const unsigned int N) {
+	// Base row and base column (two tiles per block in x)
+	const unsigned int warpRow = blockIdx.y * 16;
+	const unsigned int tileColBase = blockIdx.x * 32; // each block covers 32 columns (two 16-wide tiles)
+
+	if (warpRow >= M || tileColBase >= N) return;
+
+	// Identify the warp within the block: 0 or 1 (since blockDim.x == 64)
+	const unsigned int warpId = threadIdx.x / 32;
+
+	// Shared memory for one 16x16 A block (row-major). Declared dynamically so
+	// bench can specify proper shared size (256 * sizeof(half)).
+	extern __shared__ half sA[]; // length in elements: 16*16 == 256
+
+	wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+	wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+	wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+
+	wmma::fill_fragment(c_frag, 0.0f);
+
+	// hdr indexes blocks per block-row; warpRow/16 gives the block-row index
+	const int blockRowIdx = warpRow / 16;
+	// For each non-zero block in this block-row, stage A into shared mem then
+	// both warps will read from sA to perform the WMMA operation.
+	for (int k = hdr[blockRowIdx]; k < hdr[blockRowIdx + 1]; ++k) {
+		// Global pointer to A block (16x16) stored contiguously
+		const half *a_global = data + static_cast<size_t>(k) * 16 * 16;
+
+		// Cooperatively load the 256 half elements into shared memory.
+		// Each thread in the block will load multiple elements if needed.
+		for (int i = threadIdx.x; i < 16 * 16; i += blockDim.x) {
+			sA[i] = a_global[i];
+		}
+		__syncthreads();
+
+		// Now load A from shared memory and B from global memory per-warp
+		if (warpId == 0) {
+			// left tile: columns start at tileColBase
+			wmma::load_matrix_sync(a_frag, sA, 16);
+			wmma::load_matrix_sync(b_frag, B + static_cast<size_t>(idx[k]) * 16 * N + tileColBase, N);
+			wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+		} else {
+			// right tile: columns start at tileColBase + 16
+			if (tileColBase + 16 >= N) {
+				__syncthreads();
+				continue;
+			}
+			wmma::load_matrix_sync(a_frag, sA, 16);
+			wmma::load_matrix_sync(b_frag, B + static_cast<size_t>(idx[k]) * 16 * N + tileColBase + 16, N);
+			wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+		}
+
+		// Ensure all warps have finished reading before the next iteration
+		__syncthreads();
+	}
+
+	// Store the accumulator back to C for the tile belonging to this warp
+	if (warpId == 0) {
+		wmma::store_matrix_sync(C + static_cast<size_t>(warpRow) * N + tileColBase, c_frag, N, wmma::mem_row_major);
+	} else {
+		if (tileColBase + 16 < N) {
+			wmma::store_matrix_sync(C + static_cast<size_t>(warpRow) * N + tileColBase + 16, c_frag, N, wmma::mem_row_major);
+		}
+	}
+}
+
 // Local constant to match main.cu's thread configuration
 constexpr unsigned int N_THREADS = 32;
 
@@ -651,6 +723,61 @@ static void bench_sparseMatrixMulTensor_v2(nvbench::state &state) {
       state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
 }
 
+// Benchmark: sparseMatrixMulTensor_v3 (A staged to shared memory)
+static void bench_sparseMatrixMulTensor_v3(nvbench::state &state) {
+	const int M = static_cast<int>(state.get_int64("M"));
+	const int K = static_cast<int>(state.get_int64("K"));
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
+
+	auto buf = prepare_buffers(M, K, N, spars, pattern);
+
+	// grid.x halves because each block handles two 16-wide tiles (32 columns)
+	dim3 gridSize{static_cast<unsigned int>((N + 31) / 32), static_cast<unsigned int>((M + 15) / 16), 1};
+	dim3 blockSize{64, 1, 1};
+
+	// shared memory size: 16*16 half elements
+	const unsigned int sharedBytes = static_cast<unsigned int>(16 * 16 * sizeof(half));
+
+	state.add_element_count(static_cast<size_t>(M) * N);
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		// clear output buffer for this iteration on the launch stream
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		// start timer
+		timer.start();
+		sparseMatrixMulTensor_v3<<<gridSize, blockSize, sharedBytes, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(N));
+		// stop timer
+		timer.stop();
+	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::abort();
+			}
+		}
+	}
+
+	// report summary tweaks
+	state.get_summary("nv/cold/time/gpu/min").remove_value("hide");
+      state.get_summary("nv/cold/time/gpu/max").remove_value("hide");
+      state.get_summary("nv/cold/time/gpu/mean").remove_value("hide");
+      state.get_summary("nv/cold/time/cpu/mean").remove_value("hide");
+      state.get_summary("nv/cold/time/cpu/min").remove_value("hide");
+      state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
+}
+}
+
 // Benchmark: cuBLAS (GEMM) - no tensor ops
 static void bench_cuBLAS(nvbench::state &state) {
 	const int M = static_cast<int>(state.get_int64("M"));
@@ -763,6 +890,7 @@ NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add
 // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
 
 
 // // Register benches and axes
@@ -773,6 +901,7 @@ NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add
 // // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {80,90}).add_int64_axis("PAT", {3,4});
 
 // // // // size 512 * 2048
 // // // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
