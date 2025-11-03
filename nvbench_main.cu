@@ -1047,8 +1047,11 @@ static void bench_sparseMatrixMulTensorlargeRandom(nvbench::state &state) {
 	}
 
 	state.get_summary("nv/cold/time/gpu/min").remove_value("hide");
-	state.get_summary("nv/cold/time/gpu/max").remove_value("hide");
-	state.get_summary("nv/cold/time/gpu/mean").remove_value("hide");
+    state.get_summary("nv/cold/time/gpu/max").remove_value("hide");
+    state.get_summary("nv/cold/time/gpu/mean").remove_value("hide");
+    state.get_summary("nv/cold/time/cpu/mean").remove_value("hide");
+    state.get_summary("nv/cold/time/cpu/min").remove_value("hide");
+    state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
 }
 
 // Benchmark: sparseMatrixMulTensor_v1_improved
