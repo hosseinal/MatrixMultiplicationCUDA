@@ -21,7 +21,9 @@ Matrix<T> generate_dense_block(int rows, int cols, std::mt19937 &rng);
 // Generate a full matrix with the given pattern.
 // sparsity: fraction of zeros in the matrix (0.0..1.0). Default 0.7 like the python script.
 // pattern: "random", "checkerboard", "diagonal", "blockdiagonal", "blockrandom"
-// blocksize: used by block-based patterns
+//          and "largerandom" (rectangular block-random with 64x16 blocks)
+// blocksize: used by block-based patterns (square blocks). "largerandom" ignores
+//            this parameter and uses 64x16 blocks.
 // seed: RNG seed
 template<typename T>
 Matrix<T> generate_matrix(int num_rows,

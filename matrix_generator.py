@@ -59,6 +59,22 @@ def generate_matrix(output: str, num_rows: int, num_cols: int, sparsity: float,
                 if mask[i][j] != 0:
                     fill_block(i, j)
 
+    elif pattern in ('largerandom', 'largerandom_block', 'largerandom block'):
+        # Generate rectangular block-random pattern where blocks are 64 rows x 16 cols
+        brow, bcol = 64, 16
+        mask = sparse.random(num_rows // brow + 1,
+                             num_cols // bcol + 1,
+                             (1.0 - sparsity), dtype='int32').toarray()
+        for i in range(num_rows // brow + 1):
+            for j in range(num_cols // bcol + 1):
+                if mask[i][j] != 0:
+                    start_row = i * brow
+                    start_col = j * bcol
+                    end_row = min(start_row + brow, num_rows)
+                    end_col = min(start_col + bcol, num_cols)
+                    block_shape = (end_row - start_row, end_col - start_col)
+                    matrix[start_row:end_row, start_col:end_col] = generate_dense_matrix(block_shape, dtype)
+
 
     else:
         print("Pattern not recognized")
@@ -110,7 +126,7 @@ def main():
                         help='Generate the matrix heatmap')
     parser.add_argument('-p', '--pattern', default='random',
                         choices=['random', 'checkerboard', 'diagonal',
-                                 'blockdiagonal', 'blockrandom',
+                                 'blockdiagonal', 'blockrandom', 'largerandom',
                                  'r', 'c', 'd', 'D', 'R'],
                         help='Pattern used to fill the matrix')
     parser.add_argument('-b', '--blocksize', default=32, type=int,

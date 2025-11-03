@@ -53,6 +53,88 @@ __global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
 
 }
 
+
+// Variant: largeRandom-specific kernel. Assumes we want to process 4 consecutive
+// 16-row panels (64 rows) in a single block and one 16-column tile. For the
+// "largerandom" pattern we generate 64x16 blocks; this kernel reads up to 4
+// distinct 16x16 A blocks (one per sub-row) and multiplies each with the same
+// B tile, producing four 16x16 WMMA accumulators that are written back to C.
+__global__ void sparseMatrixMulTensorlargeRandom(const int *hdr, const int *idx,
+												 const half *data, const half *B,
+												 float *C, const unsigned int M, const unsigned int N) {
+	// Each block covers 64 rows (4*16) and 16 columns
+	const unsigned int blockRow64 = blockIdx.y * 64u;
+	const unsigned int tileCol = blockIdx.x * 16u;
+
+	if (blockRow64 >= M || tileCol >= N) return;
+
+	// Prepare 4 WMMA accumulators, one per 16-row sub-panel
+	wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag0, a_frag1, a_frag2, a_frag3;
+	wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+	wmma::fragment<wmma::accumulator, 16, 16, 16, float> c0, c1, c2, c3;
+
+	wmma::fill_fragment(c0, 0.0f);
+	wmma::fill_fragment(c1, 0.0f);
+	wmma::fill_fragment(c2, 0.0f);
+	wmma::fill_fragment(c3, 0.0f);
+
+	// base block-row index in 16-row units
+	const int baseBlockRow = static_cast<int>(blockRow64 / 16u);
+
+	// Determine how many valid 16-row sub-blocks we have (up to 4)
+	unsigned int remaining_rows = (M > blockRow64) ? (M - blockRow64) : 0u;
+	int sub_count = static_cast<int>((remaining_rows + 15u) / 16u);
+	if (sub_count > 4) sub_count = 4;
+
+	// Compute base block-row indices for the up-to-4 sub-block-rows
+	const int br0 = baseBlockRow + 0;
+	const int br1 = baseBlockRow + 1;
+	const int br2 = baseBlockRow + 2;
+	const int br3 = baseBlockRow + 3;
+
+	// Compute combined k range across the sub-rows so we can load B once per k
+	const int k_start = hdr[baseBlockRow];
+	const int k_end = hdr[baseBlockRow + sub_count];
+
+	// Iterate once over the combined k range. For each k load B tile a single
+	// time and dispatch the multiply for whichever sub-rows include that k.
+	for (int k = k_start; k < k_end; ++k) {
+		const size_t b_off = static_cast<size_t>(idx[k]) * 16u * static_cast<size_t>(N) + static_cast<size_t>(tileCol);
+		wmma::load_matrix_sync(b_frag, B + b_off, N);
+
+		// If k belongs to sub-row 0
+		if (sub_count >= 1 && k >= hdr[br0] && k < hdr[br0 + 1]) {
+			wmma::load_matrix_sync(a_frag0, data + static_cast<size_t>(k) * 16u * 16u, 16);
+			wmma::mma_sync(c0, a_frag0, b_frag, c0);
+		}
+		// sub-row 1
+		if (sub_count >= 2 && k >= hdr[br1] && k < hdr[br1 + 1]) {
+			wmma::load_matrix_sync(a_frag1, data + static_cast<size_t>(k) * 16u * 16u, 16);
+			wmma::mma_sync(c1, a_frag1, b_frag, c1);
+		}
+		// sub-row 2
+		if (sub_count >= 3 && k >= hdr[br2] && k < hdr[br2 + 1]) {
+			wmma::load_matrix_sync(a_frag2, data + static_cast<size_t>(k) * 16u * 16u, 16);
+			wmma::mma_sync(c2, a_frag2, b_frag, c2);
+		}
+		// sub-row 3
+		if (sub_count == 4 && k >= hdr[br3] && k < hdr[br3 + 1]) {
+			wmma::load_matrix_sync(a_frag3, data + static_cast<size_t>(k) * 16u * 16u, 16);
+			wmma::mma_sync(c3, a_frag3, b_frag, c3);
+		}
+	}
+
+	// Store each 16x16 accumulator to the corresponding rows in C (guard columns)
+	const unsigned int outCol = tileCol;
+	if (outCol < N) {
+		// sub 0
+		if (blockRow64 + 0 * 16u < M) wmma::store_matrix_sync(C + static_cast<size_t>(blockRow64 + 0 * 16u) * N + outCol, c0, N, wmma::mem_row_major);
+		if (blockRow64 + 1 * 16u < M) wmma::store_matrix_sync(C + static_cast<size_t>(blockRow64 + 1 * 16u) * N + outCol, c1, N, wmma::mem_row_major);
+		if (blockRow64 + 2 * 16u < M) wmma::store_matrix_sync(C + static_cast<size_t>(blockRow64 + 2 * 16u) * N + outCol, c2, N, wmma::mem_row_major);
+		if (blockRow64 + 3 * 16u < M) wmma::store_matrix_sync(C + static_cast<size_t>(blockRow64 + 3 * 16u) * N + outCol, c3, N, wmma::mem_row_major);
+	}
+}
+
 // Improved v1 variant: cooperative A staging, unified warp path, reduced divergence,
 // size-safe offsets and restrict qualifiers. This keeps the same block layout as v2
 // (64 threads, two 16x16 tiles per block horizontally). It uses WMMA for full
@@ -902,6 +984,50 @@ static void bench_sparseMatrixMulTensor_v3(nvbench::state &state) {
       state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
 }
 
+// Benchmark: sparseMatrixMulTensorlargeRandom (process 4x16-row panels -> 64 rows per block)
+static void bench_sparseMatrixMulTensorlargeRandom(nvbench::state &state) {
+	const int M = static_cast<int>(state.get_int64("M"));
+	const int K = static_cast<int>(state.get_int64("K"));
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
+
+	auto buf = prepare_buffers(M, K, N, spars, pattern);
+
+	// grid.x corresponds to 16-column tiles, grid.y to 64-row tiles
+	dim3 gridSize{static_cast<unsigned int>((N + 15) / 16), static_cast<unsigned int>((M + 63) / 64), 1};
+	dim3 blockSize{32, 1, 1};
+
+	state.add_element_count(static_cast<size_t>(M) * N);
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		timer.start();
+		sparseMatrixMulTensorlargeRandom<<<gridSize, blockSize, 0, launch.get_stream()>>>(buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC, static_cast<unsigned int>(M), static_cast<unsigned int>(N));
+		timer.stop();
+	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::abort();
+			}
+		}
+	}
+
+	state.get_summary("nv/cold/time/gpu/min").remove_value("hide");
+	state.get_summary("nv/cold/time/gpu/max").remove_value("hide");
+	state.get_summary("nv/cold/time/gpu/mean").remove_value("hide");
+}
+
 // Benchmark: sparseMatrixMulTensor_v1_improved
 static void bench_sparseMatrixMulTensor_v1_improved(nvbench::state &state) {
 	const int M = static_cast<int>(state.get_int64("M"));
@@ -1109,71 +1235,82 @@ static void bench_sparseMatrixMulTensor_option2_ldmatrix_sm80(nvbench::state &st
 // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {3,4});
 // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
 // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor_v1_improved).set_name("sparseMatrixMulTensor_v1_improved").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor_option2_ldmatrix_sm80).set_name("sparseMatrixMulTensor_option2_ldmatrix_sm80").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0,1});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {3,4});
 
 
 // // Register benches and axes
 // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {80,90}).add_int64_axis("PAT", {3,4});
-// // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {80,90}).add_int64_axis("PAT", {3,4});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {80,90}).add_int64_axis("PAT", {3,4});
-NVBENCH_BENCH(bench_sparseMatrixMulTensor_v1_improved).set_name("sparseMatrixMulTensor_v1_improved").add_int64_axis("N", {32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {80,90}).add_int64_axis("PAT", {3,4});
-// // // // size 512 * 2048
-// // // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+// NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {80,90}).add_int64_axis("PAT", {3,4});
+// // // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+// // // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+// NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {80,90}).add_int64_axis("PAT", {3,4});
+// NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {32, 64}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {80,90}).add_int64_axis("PAT", {3,4});
 
-// // // // size 512 * 4608
-// // // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+// // // size 512 * 2048
+// // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+// // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+// // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {2048}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
 
+// // // size 512 * 4608
+// // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+// // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+// // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {4608}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
 // // // // size 256 * 1024
 // // // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {256}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+
 
 // // // // size 512 * 256
 // // // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // Register v2 variant
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {256,512,1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+
 
 // // // // size 2048 * 1024
 // // // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {2048}).add_int64_axis("K", {1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
 
 // // // //size 512 * 512
 // // // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16, 32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // // NVBENCH_BENCH(bench_denseMatrixMulTensor).set_name("denseMatrixMulTensor").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
 // // // // NVBENCH_BENCH(bench_sparseMatrixMult1).set_name("sparseMatrixMult1").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
-// // // NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {0,1,2,3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS).set_name("cuBLAS_GEMM").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {128, 256, 512}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
+
+// Register the large-random specific bench. Use PAT indices that correspond to block patterns (3,4 used elsewhere)
+NVBENCH_BENCH(bench_sparseMatrixMulTensorlargeRandom).set_name("sparseMatrixMulTensorlargeRandom").add_int64_axis("N", {16, 32, 64}).add_int64_axis("M", {256,512}).add_int64_axis("K", {256,1024}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {3,4});
