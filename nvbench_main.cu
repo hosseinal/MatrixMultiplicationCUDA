@@ -1007,6 +1007,47 @@ static void bench_sparseMatrixMulTensor_v3(nvbench::state &state) {
       state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
 }
 
+// Function to print the first 64x16 blocks of matrix A for debugging
+void print_matrix_A_blocks(const std::vector<float>& matrixA, int M, int K, int num_blocks_to_print = 4) {
+    std::cout << "\n=== Printing first " << num_blocks_to_print << " blocks (64x16 each) of Matrix A ===" << std::endl;
+    std::cout << "Matrix A dimensions: " << M << " x " << K << std::endl;
+    
+    // Calculate how many 64x16 blocks we can fit
+    int blocks_in_M = M / 64;
+    int blocks_in_K = K / 16;
+    
+    std::cout << "Total blocks in M direction: " << blocks_in_M << std::endl;
+    std::cout << "Total blocks in K direction: " << blocks_in_K << std::endl;
+    
+    // Print the first few blocks
+    int blocks_printed = 0;
+    for (int block_m = 0; block_m < blocks_in_M && blocks_printed < num_blocks_to_print; block_m++) {
+        for (int block_k = 0; block_k < blocks_in_K && blocks_printed < num_blocks_to_print; block_k++) {
+            std::cout << "\n--- Block (" << block_m << ", " << block_k << ") ---" << std::endl;
+            std::cout << "Rows " << (block_m * 64) << " to " << (block_m * 64 + 63) 
+                      << ", Cols " << (block_k * 16) << " to " << (block_k * 16 + 15) << std::endl;
+            
+            // Print the 64x16 block
+            for (int row = 0; row < 64; row++) {
+                int global_row = block_m * 64 + row;
+                if (global_row >= M) break;
+                
+                std::cout << "Row " << std::setw(3) << global_row << ": ";
+                for (int col = 0; col < 16; col++) {
+                    int global_col = block_k * 16 + col;
+                    if (global_col >= K) break;
+                    
+                    float val = matrixA[global_row * K + global_col];
+                    std::cout << std::setw(6) << std::fixed << std::setprecision(2) << val << " ";
+                }
+                std::cout << std::endl;
+            }
+            blocks_printed++;
+        }
+    }
+    std::cout << "=== End of Matrix A blocks ===" << std::endl;
+}
+
 // Benchmark: sparseMatrixMulTensorlargeRandom (process 4x16-row panels -> 64 rows per block)
 static void bench_sparseMatrixMulTensorlargeRandom(nvbench::state &state) {
 	const int M = static_cast<int>(state.get_int64("M"));
@@ -1018,6 +1059,9 @@ static void bench_sparseMatrixMulTensorlargeRandom(nvbench::state &state) {
 	const std::string pattern = patterns.at(patIdx % patterns.size());
 
 	auto buf = prepare_buffers(M, K, N, spars, pattern);
+
+	// Print the first few 64x16 blocks of matrix A for debugging
+	print_matrix_A_blocks(buf->matrixA, M, K, 4);
 
 	// grid.x corresponds to 16-column tiles, grid.y to 64-row tiles
 	dim3 gridSize{static_cast<unsigned int>((N + 15) / 32), static_cast<unsigned int>((M + 63) / 64), 1};
