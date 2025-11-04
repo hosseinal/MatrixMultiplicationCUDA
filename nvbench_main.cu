@@ -1311,6 +1311,7 @@ NVBENCH_BENCH(bench_sparseMatrixMulTensor).set_name("sparseMatrixMulTensor").add
 NVBENCH_BENCH(bench_sparseMatrixMulTensor_v2).set_name("sparseMatrixMulTensor_v2").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {5});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor_v3).set_name("sparseMatrixMulTensor_v3").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {5});
 // NVBENCH_BENCH(bench_sparseMatrixMulTensorlargeRandom).set_name("sparseMatrixMulTensorlargeRandom").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {5});
+NVBENCH_BENCH(bench_sparseMatrixMulTensorlargeRandom).set_name("sparseMatrixMulTensorlargeRandom").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50,60,70,80,90}).add_int64_axis("PAT", {5});
 
 
 // NVBENCH_BENCH(bench_denseMatrixMul).set_name("denseMatrixMul").add_int64_axis("N", {16}).add_int64_axis("M", {256}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {50}).add_int64_axis("PAT", {0});
