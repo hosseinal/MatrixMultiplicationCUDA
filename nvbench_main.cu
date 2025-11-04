@@ -1008,7 +1008,7 @@ static void bench_sparseMatrixMulTensor_v3(nvbench::state &state) {
 }
 
 // Function to print the first 64x16 blocks of matrix A for debugging
-void print_matrix_A_blocks(const std::vector<float>& matrixA, int M, int K, int num_blocks_to_print = 4) {
+void print_matrix_A_blocks(Matrix* matrixA, int M, int K, int num_blocks_to_print = 4) {
     std::cout << "\n=== Printing first " << num_blocks_to_print << " blocks (64x16 each) of Matrix A ===" << std::endl;
     std::cout << "Matrix A dimensions: " << M << " x " << K << std::endl;
     
@@ -1037,7 +1037,9 @@ void print_matrix_A_blocks(const std::vector<float>& matrixA, int M, int K, int 
                     int global_col = block_k * 16 + col;
                     if (global_col >= K) break;
                     
-                    float val = matrixA[global_row * K + global_col];
+                    // Convert half to float for printing
+                    half val_half = matrixA->data[global_row * K + global_col];
+                    float val = __half2float(val_half);
                     std::cout << std::setw(6) << std::fixed << std::setprecision(2) << val << " ";
                 }
                 std::cout << std::endl;
