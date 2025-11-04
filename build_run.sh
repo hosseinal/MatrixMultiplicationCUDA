@@ -20,6 +20,8 @@ make -j8
 
 ./matrix_multiplication > ../matrix_multiplication_output.txt
 
-ncu --target-processes all --set full -o ./profiling_matrix_multiplication ./matrix_multiplication > results_matrix_multiplication_with_profiling.json < /dev/null
+./matrix_multiplication_nvbench > ../matrix_multiplication_nvbench_output.txt
+
+# ncu --target-processes all --set full -o ./profiling_matrix_multiplication ./matrix_multiplication > results_matrix_multiplication_with_profiling.json < /dev/null
 
 
