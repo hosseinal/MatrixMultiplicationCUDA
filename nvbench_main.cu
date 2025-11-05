@@ -43,8 +43,6 @@ using namespace nvcuda;
 
 // Local constant to match main.cu's thread configuration
 constexpr unsigned int N_THREADS = 32;
-// Local constant to match main.cu's thread configuration
-constexpr unsigned int N_THREADS = 32;
 
 // Provide BLOCK_SIZE definition with external linkage for translation units that expect it.
 // main.cu defines this for the application; nvbench builds a separate TU so
