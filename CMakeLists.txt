@@ -20,30 +20,30 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 #add_compile_definitions(CHECK_CORRECTNESS)
 
 # Add executable
-add_executable(matrix_multiplication main.cu
-        Matrix.cuh
-        Matrix.cu
-        CSRMatrix.cu
-        CSRMatrix.cuh
-        BCSRMatrix.cu
-        BCSRMatrix.cuh
-        miscutil.cpp
-        miscutil.h
-        HCSRMatrix.cpp
-        HCSRMatrix.h
-        src/cuda_kernels.cuh
-        src/cuda_kernels.cu
-)
+# add_executable(matrix_multiplication main.cu
+#         Matrix.cuh
+#         Matrix.cu
+#         CSRMatrix.cu
+#         CSRMatrix.cuh
+#         BCSRMatrix.cu
+#         BCSRMatrix.cuh
+#         miscutil.cpp
+#         miscutil.h
+#         HCSRMatrix.cpp
+#         HCSRMatrix.h
+#         src/cuda_kernels.cuh
+#         src/cuda_kernels.cu
+# )
 
 # Set CUDA specific properties
-set_target_properties(matrix_multiplication PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-)
+# set_target_properties(matrix_multiplication PROPERTIES
+#     CUDA_SEPARABLE_COMPILATION ON
+# )
 
 find_package(CUDAToolkit REQUIRED)
 
-target_link_libraries(matrix_multiplication CUDA::cusparse stdc++ -lcublas
-        -lcurand)
+# target_link_libraries(matrix_multiplication CUDA::cusparse stdc++ -lcublas
+#         -lcurand)
 
 # Optional: build a small matrix generator test (CPU-only)
 option(BUILD_MG_TEST "Build matrix generator test" OFF)

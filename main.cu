@@ -15,6 +15,7 @@
 #include "HCSRMatrix.h"
 #include "Matrix.cuh"
 #include "miscutil.h"
+#include "src/cuda_kernels.cuh"
 
 unsigned int N = 0;
 constexpr unsigned int N_THREADS = 32;
