@@ -6,6 +6,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <stdexcept>
 
 #include "miscutil.h"
 
@@ -18,38 +19,52 @@ extern const int BLOCK_SIZE;
                             assert(error == cudaSuccess);
 
 
-BCSRMatrix::BCSRMatrix(const Matrix &matrix) {
-    // find dense 16x16 blocks
-    blockRows = matrix.rows / BLOCK_SIZE;
+BCSRMatrix::BCSRMatrix(const Matrix &matrix, int blockSizeRow, int blockSizeCol) 
+    : blockSizeRow(blockSizeRow), blockSizeCol(blockSizeCol) {
+    // Validate block sizes - WMMA requires at least 16x16 blocks
+    if (blockSizeRow < 16 || blockSizeCol < 16) {
+        throw std::invalid_argument("Block sizes must be at least 16x16 for WMMA compatibility. "
+                                  "Got " + std::to_string(blockSizeRow) + "x" + std::to_string(blockSizeCol));
+    }
+    
+    // Validate block sizes are multiples of 16 - required for WMMA alignment
+    if (blockSizeRow % 16 != 0 || blockSizeCol % 16 != 0) {
+        throw std::invalid_argument("Block sizes must be multiples of 16 for WMMA alignment. "
+                                  "Got " + std::to_string(blockSizeRow) + "x" + std::to_string(blockSizeCol));
+    }
+    
+    // find dense blocks of specified size
+    blockRows = matrix.rows / blockSizeRow;
+    blockCols = matrix.cols / blockSizeCol;
     hdr = static_cast<int *>(malloc((blockRows + 1) * sizeof(int)));
     hdr[0] = 0;
 
-    for (int i = 0; i < matrix.rows; i += BLOCK_SIZE) {
-        hdr[i / BLOCK_SIZE + 1] = hdr[i / BLOCK_SIZE];
-        for (int j = 0; j < matrix.cols; j += BLOCK_SIZE) {
-            if (blockDensity(matrix, i, j) > 0.0f) {
-                hdr[i / BLOCK_SIZE + 1]++;
+    for (int i = 0; i < matrix.rows; i += blockSizeRow) {
+        hdr[i / blockSizeRow + 1] = hdr[i / blockSizeRow];
+        for (int j = 0; j < matrix.cols; j += blockSizeCol) {
+            if (blockDensity(matrix, i, j, blockSizeRow, blockSizeCol) > 0.0f) {
+                hdr[i / blockSizeRow + 1]++;
             }
         }
     }
 
     idx = static_cast<int *>(malloc(hdr[blockRows] * sizeof(int)));
     data = static_cast<half *>(malloc(
-        hdr[blockRows] * sizeof(half) * BLOCK_SIZE * BLOCK_SIZE));
+        hdr[blockRows] * sizeof(half) * blockSizeRow * blockSizeCol));
 
     int k = 0;
-    for (int i = 0; i < matrix.rows; i += BLOCK_SIZE) {
-        for (int j = 0; j < matrix.cols; j += BLOCK_SIZE) {
-            if (blockDensity(matrix, i, j) > 0.0f) {
-                idx[k] = j / BLOCK_SIZE;
+    for (int i = 0; i < matrix.rows; i += blockSizeRow) {
+        for (int j = 0; j < matrix.cols; j += blockSizeCol) {
+            if (blockDensity(matrix, i, j, blockSizeRow, blockSizeCol) > 0.0f) {
+                idx[k] = j / blockSizeCol;
                 // obtain fragment
-                for (int x = 0; x < BLOCK_SIZE; x++) {
-                    for (int y = 0; y < BLOCK_SIZE; y++) {
-                        data[k * BLOCK_SIZE * BLOCK_SIZE + x * BLOCK_SIZE + y] =
+                for (int x = 0; x < blockSizeRow; x++) {
+                    for (int y = 0; y < blockSizeCol; y++) {
+                        data[k * blockSizeRow * blockSizeCol + x * blockSizeCol + y] =
                                 matrix.data[(i + x) * matrix.cols + j + y];
                     }
                 }
-                nonZeros += BLOCK_SIZE * BLOCK_SIZE;
+                nonZeros += blockSizeRow * blockSizeCol;
                 k++;
             }
         }
@@ -65,6 +80,7 @@ BCSRMatrix::~BCSRMatrix() {
 }
 
 void BCSRMatrix::print() const {
+    std::cout << "Block size: " << blockSizeRow << "x" << blockSizeCol << std::endl;
     std::cout << "hdr:\n\t";
     for (int i = 0; i < blockRows; i++) {
         std::cout << hdr[i] << " ";
@@ -76,11 +92,11 @@ void BCSRMatrix::print() const {
     std::cout << "\ndata:\n\t";
     for (int i = 0; i < hdr[blockRows]; i++) {
         std::cout << "=== Block " << i << " ===\n";
-        for (int j = 0; j < BLOCK_SIZE; j++) {
+        for (int j = 0; j < blockSizeRow; j++) {
             cout << '\t';
-            for (int k = 0; k < BLOCK_SIZE; k++) {
+            for (int k = 0; k < blockSizeCol; k++) {
                 cout << __half2float(
-                    data[i * BLOCK_SIZE * BLOCK_SIZE + j * BLOCK_SIZE + k]) <<" ";
+                    data[i * blockSizeRow * blockSizeCol + j * blockSizeCol + k]) <<" ";
             }
             cout << '\n';
         }
@@ -100,7 +116,7 @@ const {
     ASSERT_CUDA_SUCCESS;
 
     cudaMalloc(reinterpret_cast<void **>(gpuData),
-               hdr[blockRows] * sizeof(half) * BLOCK_SIZE * BLOCK_SIZE);
+               hdr[blockRows] * sizeof(half) * blockSizeRow * blockSizeCol);
     ASSERT_CUDA_SUCCESS;
 
     cudaMemcpy(*gpuHdr, hdr, (blockRows + 1) * sizeof(int),
@@ -110,7 +126,7 @@ const {
                cudaMemcpyHostToDevice);
     ASSERT_CUDA_SUCCESS;
     cudaMemcpy(*gpuData, data,
-               hdr[blockRows] * sizeof(half) * BLOCK_SIZE * BLOCK_SIZE,
+               hdr[blockRows] * sizeof(half) * blockSizeRow * blockSizeCol,
                cudaMemcpyHostToDevice);
     ASSERT_CUDA_SUCCESS;
 }

@@ -16,6 +16,6 @@ float maxdiff(const float *A, const float *B, const unsigned int n);
 
 float avgrelerr(const float *A, const float *B, const unsigned int n);
 
-float blockDensity(const Matrix &matrix, int i, int j);
+float blockDensity(const Matrix &matrix, int i, int j, int blockSizeRow = 16, int blockSizeCol = 16);
 
 #endif //MISCUTIL_H

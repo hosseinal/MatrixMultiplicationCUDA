@@ -31,6 +31,8 @@ add_executable(matrix_multiplication main.cu
         miscutil.h
         HCSRMatrix.cpp
         HCSRMatrix.h
+        src/cuda_kernels.cuh
+        src/cuda_kernels.cu
 )
 
 # Set CUDA specific properties
@@ -74,6 +76,8 @@ add_executable(matrix_multiplication_nvbench
     miscutil.h
     HCSRMatrix.cpp
     HCSRMatrix.h
+    src/cuda_kernels.cuh
+    src/cuda_kernels.cu
 )
 set_target_properties(matrix_multiplication_nvbench PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(matrix_multiplication_nvbench PROPERTIES CXX_STANDARD 17)

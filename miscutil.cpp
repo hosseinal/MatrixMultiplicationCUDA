@@ -73,15 +73,15 @@ float avgrelerr(const float *A, const float *B, const unsigned int n) {
     return static_cast<float>(sum / static_cast<double>(total));
 }
 
-float blockDensity(const Matrix &matrix, int i, int j) {
+float blockDensity(const Matrix &matrix, int i, int j, int blockSizeRow, int blockSizeCol) {
     int nonZeros = 0;
-    for (int i1 = i; i1 < i + BLOCK_SIZE; i1++) {
-        for (int j1 = j; j1 < j + BLOCK_SIZE; j1++) {
+    for (int i1 = i; i1 < i + blockSizeRow; i1++) {
+        for (int j1 = j; j1 < j + blockSizeCol; j1++) {
             if (matrix.data[i1 * matrix.cols + j1])
                 nonZeros++;
         }
     }
 
     return static_cast<float>(nonZeros) / static_cast<float>(
-               BLOCK_SIZE * BLOCK_SIZE);
+               blockSizeRow * blockSizeCol);
 }
