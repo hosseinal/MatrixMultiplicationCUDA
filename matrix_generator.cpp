@@ -92,9 +92,29 @@ Matrix<T> generate_matrix(int num_rows,
             for (int j = 0; j < nbj; ++j)
                 if (keep(rng)) fill_block(i, j);
 
-    } else if (pattern == "largerandom" || pattern == "largerandom_block" || pattern == "largerandom block") {
+    } else if (pattern == "pattern64by16") {
         // Rectangular block-random pattern with block height 64 and block width 16
         const int brow = 64;
+        const int bcol = 16;
+        int nbi = (num_rows + brow - 1) / brow;
+        int nbj = (num_cols + bcol - 1) / bcol;
+        std::bernoulli_distribution keep(1.0 - sparsity);
+        for (int bi = 0; bi < nbi; ++bi) {
+            for (int bj = 0; bj < nbj; ++bj) {
+                if (!keep(rng)) continue;
+                int start_row = bi * brow;
+                int start_col = bj * bcol;
+                int end_row = std::min(start_row + brow, num_rows);
+                int end_col = std::min(start_col + bcol, num_cols);
+                auto block = generate_dense_block<T>(end_row - start_row, end_col - start_col, rng);
+                for (int i = start_row; i < end_row; ++i)
+                    for (int j = start_col; j < end_col; ++j)
+                        mat[i][j] = block[i - start_row][j - start_col];
+            }
+        }
+    } else if (pattern == "pattern32by16") {
+        // Rectangular block-random pattern with block height 32 and block width 16
+        const int brow = 32;
         const int bcol = 16;
         int nbi = (num_rows + brow - 1) / brow;
         int nbj = (num_cols + bcol - 1) / bcol;

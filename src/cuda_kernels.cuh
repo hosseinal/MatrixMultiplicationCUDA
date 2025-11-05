@@ -60,10 +60,25 @@ __global__ void sparseMatrixMulTensor_option2_ldmatrix_sm80(const int *hdr, cons
                                                             const half *data, const half *B,
                                                             float *C, const unsigned int M, const unsigned int N);
 
-// Large random pattern specific kernel
-__global__ void sparseMatrixMulTensorlargeRandom(const int *hdr, const int *idx,
+// Large random pattern specific kernel (64x16 blocks)
+__global__ void sparseMatrixMulTensor64x16(const int *hdr, const int *idx,
                                                  const half *data, const half *B,
                                                  float *C, const unsigned int M, const unsigned int N);
+
+// 64x16 block size specific kernel v2 (similar to v2 but for 64x16 blocks, uses 64 threads)
+__global__ void sparseMatrixMulTensor64x16_v2(const int *hdr, const int *idx,
+                                              const half *data, const half *B,
+                                              float *C, const unsigned int M, const unsigned int N);
+
+// 32x16 block size specific kernel
+__global__ void sparseMatrixMulTensor32x16(const int *hdr, const int *idx,
+                                          const half *data, const half *B,
+                                          float *C, const unsigned int M, const unsigned int N);
+
+// 32x16 block size specific kernel v2 (v2-style for 32x16 blocks, uses 64 threads)
+__global__ void sparseMatrixMulTensor32x16_v2(const int *hdr, const int *idx,
+                                              const half *data, const half *B,
+                                              float *C, const unsigned int M, const unsigned int N);
 
 // Utility kernels
 __global__ void addMatrices(float *C, const float *CPart, const unsigned int n);
