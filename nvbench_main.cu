@@ -213,7 +213,8 @@ static void bench_denseMatrixMul(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[denseMatrixMul kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -259,7 +260,8 @@ static void bench_denseMatrixMulTensor(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[denseMatrixMulTensor kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -305,7 +307,8 @@ static void bench_sparseMatrixMult1(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMult1 kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -350,7 +353,8 @@ static void bench_sparseMatrixMulTensor(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMulTensor kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=16x16\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -405,7 +409,8 @@ static void bench_sparseMatrixMulTensor_v2(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMulTensor_v2 kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=16x16\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -459,7 +464,8 @@ static void bench_sparseMatrixMulTensor_v3(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMulTensor_v3 kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=16x16\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -555,7 +561,8 @@ static void bench_sparseMatrixMulTensor64x16(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMulTensor64x16 kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=64x16\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -606,7 +613,8 @@ static void bench_sparseMatrixMulTensor_v1_improved(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMulTensor_v1_improved kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=16x16\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -653,7 +661,8 @@ static void bench_sparseMatrixMulTensor32x16(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMulTensor32x16 kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=32x16\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -700,7 +709,8 @@ static void bench_sparseMatrixMulTensor32x16_v2(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMulTensor32x16_v2 kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=32x16\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -747,7 +757,8 @@ static void bench_sparseMatrixMulTensor64x16_v2(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMulTensor64x16_v2 kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=64x16\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -802,7 +813,8 @@ static void bench_cuBLAS(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[cuBLAS GEMM kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s (dense reference)\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -854,7 +866,8 @@ static void bench_cuBLAS_Tensor(nvbench::state &state) {
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[cuBLAS GEMM Tensor kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s (dense reference)\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
@@ -900,7 +913,8 @@ static void bench_sparseMatrixMulTensor_option2_ldmatrix_sm80(nvbench::state &st
 		const float eps = 1e-2f;
 		for (size_t i = 0; i < out_host.size(); ++i) {
 			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "Mismatch at %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "[sparseMatrixMulTensor_option2_ldmatrix_sm80 kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=16x16\n", M, K, N, spars*100.0, pattern.c_str());
 				std::abort();
 			}
 		}
