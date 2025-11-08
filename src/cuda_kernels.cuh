@@ -80,6 +80,22 @@ __global__ void sparseMatrixMulTensor32x16_v2(const int *hdr, const int *idx,
                                               const half *data, const half *B,
                                               float *C, const unsigned int M, const unsigned int N);
 
+// Adaptive BCSR kernels that balance load based on matrix aspect ratio
+__global__ void sparseMatrixMulTensorAdaptive(const int *hdr, const int *idx,
+                                              const half *data, const half *B,
+                                              float *C, const unsigned int M, const unsigned int N,
+                                              const unsigned int colBlocksPerRow);
+
+__global__ void sparseMatrixMulTensorAdaptive32x16(const int *hdr, const int *idx,
+                                                   const half *data, const half *B,
+                                                   float *C, const unsigned int M, const unsigned int N,
+                                                   const unsigned int colBlocksPerRow);
+
+__global__ void sparseMatrixMulTensorAdaptive64x16(const int *hdr, const int *idx,
+                                                   const half *data, const half *B,
+                                                   float *C, const unsigned int M, const unsigned int N,
+                                                   const unsigned int colBlocksPerRow);
+
 // Utility kernels
 __global__ void addMatrices(float *C, const float *CPart, const unsigned int n);
 

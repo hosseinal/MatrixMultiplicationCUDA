@@ -795,3 +795,200 @@ __global__ void sparseMatrixMulTensor32x16_v2(const int *hdr, const int *idx,
 	wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 0 * 16u) * N + tileCol, c0, N, wmma::mem_row_major);
 	wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 1 * 16u) * N + tileCol, c1, N, wmma::mem_row_major);
 }
+
+// Adaptive BCSR kernel for 16x16 blocks (v2-style) that distributes column work across multiple thread blocks for "fat" matrices
+// Uses 2 warps per block (64 threads) to process two adjacent 16-column tiles horizontally
+// colBlocksPerRow: number of thread blocks assigned to each BCSR row (based on aspect ratio)
+__global__ void sparseMatrixMulTensorAdaptive(const int *hdr, const int *idx,
+                                              const half *data, const half *B,
+                                              float *C, const unsigned int M, const unsigned int N,
+                                              const unsigned int colBlocksPerRow) {
+	// Calculate which BCSR row this thread block is working on
+	const unsigned int bcsrRow = blockIdx.y;
+	const unsigned int colBlockId = blockIdx.x; // which column segment within the row
+	const unsigned int totalColTiles32 = (N + 31) / 32; // total 32-column tiles in matrix (each block handles 32 cols)
+	const unsigned int tilesPerBlock = totalColTiles32 / colBlocksPerRow; // 32-column tiles per thread block
+	const unsigned int extraTiles = totalColTiles32 % colBlocksPerRow; // remainder tiles
+	
+	// Calculate column range for this thread block (in terms of 32-column tiles)
+	unsigned int startTile, endTile;
+	if (colBlockId < extraTiles) {
+		// First 'extraTiles' blocks get one extra tile
+		startTile = colBlockId * (tilesPerBlock + 1);
+		endTile = (colBlockId + 1) * (tilesPerBlock + 1);
+	} else {
+		// Remaining blocks get standard tiles
+		startTile = extraTiles * (tilesPerBlock + 1) + (colBlockId - extraTiles) * tilesPerBlock;
+		endTile = startTile + tilesPerBlock;
+	}
+	
+	if (bcsrRow >= M / 16 || colBlockId >= colBlocksPerRow) return;
+	
+	const unsigned int warpRow = bcsrRow * 16;
+	const unsigned int warpId = threadIdx.x / 32; // 0 or 1 (since blockDim.x == 64)
+	
+	// Process each 32-column tile within this thread block's assigned range
+	for (unsigned int tileIdx = startTile; tileIdx < endTile; ++tileIdx) {
+		const unsigned int tileColBase = tileIdx * 32;
+		if (tileColBase >= N) break;
+		
+		// Each warp handles one 16-column subtile within the 32-column tile
+		const unsigned int tileCol = tileColBase + warpId * 16;
+		if (tileCol >= N) continue;
+		
+		wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+		wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+		wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+		
+		wmma::fill_fragment(c_frag, 0.0f);
+		
+		// Process all non-zero blocks in this BCSR row
+		for (int k = hdr[bcsrRow]; k < hdr[bcsrRow + 1]; k++) {
+			wmma::load_matrix_sync(a_frag, data + static_cast<size_t>(k) * 16 * 16, 16);
+			wmma::load_matrix_sync(b_frag, B + static_cast<size_t>(idx[k]) * 16 * N + tileCol, N);
+			wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+		}
+		
+		wmma::store_matrix_sync(C + static_cast<size_t>(warpRow) * N + tileCol, c_frag, N, wmma::mem_row_major);
+	}
+}
+
+// Adaptive BCSR kernel for 32x16 blocks (v2-style) 
+// Uses 2 warps per block (64 threads) to process two adjacent 16-column tiles horizontally
+__global__ void sparseMatrixMulTensorAdaptive32x16(const int *hdr, const int *idx,
+                                                   const half *data, const half *B,
+                                                   float *C, const unsigned int M, const unsigned int N,
+                                                   const unsigned int colBlocksPerRow) {
+	// Calculate which BCSR row this thread block is working on (32-row blocks)
+	const unsigned int bcsrRow = blockIdx.y;
+	const unsigned int colBlockId = blockIdx.x;
+	const unsigned int totalColTiles32 = (N + 31) / 32; // total 32-column tiles in matrix
+	const unsigned int tilesPerBlock = totalColTiles32 / colBlocksPerRow;
+	const unsigned int extraTiles = totalColTiles32 % colBlocksPerRow;
+	
+	// Calculate column range for this thread block (in terms of 32-column tiles)
+	unsigned int startTile, endTile;
+	if (colBlockId < extraTiles) {
+		startTile = colBlockId * (tilesPerBlock + 1);
+		endTile = (colBlockId + 1) * (tilesPerBlock + 1);
+	} else {
+		startTile = extraTiles * (tilesPerBlock + 1) + (colBlockId - extraTiles) * tilesPerBlock;
+		endTile = startTile + tilesPerBlock;
+	}
+	
+	if (bcsrRow >= M / 32 || colBlockId >= colBlocksPerRow) return;
+	
+	const unsigned int blockRow32 = bcsrRow * 32;
+	const unsigned int warpId = threadIdx.x / 32; // 0 or 1
+	
+	// Process each 32-column tile within this thread block's assigned range
+	for (unsigned int tileIdx = startTile; tileIdx < endTile; ++tileIdx) {
+		const unsigned int tileColBase = tileIdx * 32;
+		if (tileColBase >= N) break;
+		
+		// Each warp handles one 16-column subtile within the 32-column tile
+		const unsigned int tileCol = tileColBase + warpId * 16;
+		if (tileCol >= N) continue;
+		
+		// For 32x16 BCSR blocks, we need 2 WMMA operations vertically per warp
+		wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag0, a_frag1;
+		wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+		wmma::fragment<wmma::accumulator, 16, 16, 16, float> c0, c1;
+		
+		wmma::fill_fragment(c0, 0.0f);  // rows 0-15
+		wmma::fill_fragment(c1, 0.0f);  // rows 16-31
+		
+		// Process all non-zero 32x16 blocks in this BCSR row
+		for (int k = hdr[bcsrRow]; k < hdr[bcsrRow + 1]; ++k) {
+			// Load B fragment for this warp's column range
+			wmma::load_matrix_sync(b_frag, B + static_cast<size_t>(idx[k]) * 16u * N + tileCol, N);
+			
+			// Load A fragments from different vertical positions within the 32x16 block
+			const half *block_data = data + static_cast<size_t>(k) * 32u * 16u;
+			wmma::load_matrix_sync(a_frag0, block_data + 0 * 16u * 16u, 16);   // rows 0-15
+			wmma::load_matrix_sync(a_frag1, block_data + 1 * 16u * 16u, 16);   // rows 16-31
+			
+			// Perform WMMA operations
+			wmma::mma_sync(c0, a_frag0, b_frag, c0);
+			wmma::mma_sync(c1, a_frag1, b_frag, c1);
+		}
+		
+		// Store results for this warp's column range
+		wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 0 * 16u) * N + tileCol, c0, N, wmma::mem_row_major);
+		wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 1 * 16u) * N + tileCol, c1, N, wmma::mem_row_major);
+	}
+}
+
+// Adaptive BCSR kernel for 64x16 blocks (v2-style)
+// Uses 2 warps per block (64 threads) to process two adjacent 16-column tiles horizontally
+__global__ void sparseMatrixMulTensorAdaptive64x16(const int *hdr, const int *idx,
+                                                   const half *data, const half *B,
+                                                   float *C, const unsigned int M, const unsigned int N,
+                                                   const unsigned int colBlocksPerRow) {
+	// Calculate which BCSR row this thread block is working on (64-row blocks)
+	const unsigned int bcsrRow = blockIdx.y;
+	const unsigned int colBlockId = blockIdx.x;
+	const unsigned int totalColTiles32 = (N + 31) / 32; // total 32-column tiles in matrix
+	const unsigned int tilesPerBlock = totalColTiles32 / colBlocksPerRow;
+	const unsigned int extraTiles = totalColTiles32 % colBlocksPerRow;
+	
+	// Calculate column range for this thread block (in terms of 32-column tiles)
+	unsigned int startTile, endTile;
+	if (colBlockId < extraTiles) {
+		startTile = colBlockId * (tilesPerBlock + 1);
+		endTile = (colBlockId + 1) * (tilesPerBlock + 1);
+	} else {
+		startTile = extraTiles * (tilesPerBlock + 1) + (colBlockId - extraTiles) * tilesPerBlock;
+		endTile = startTile + tilesPerBlock;
+	}
+	
+	if (bcsrRow >= M / 64 || colBlockId >= colBlocksPerRow) return;
+	
+	const unsigned int blockRow64 = bcsrRow * 64;
+	const unsigned int warpId = threadIdx.x / 32; // 0 or 1
+	
+	// Process each 32-column tile within this thread block's assigned range
+	for (unsigned int tileIdx = startTile; tileIdx < endTile; ++tileIdx) {
+		const unsigned int tileColBase = tileIdx * 32;
+		if (tileColBase >= N) break;
+		
+		// Each warp handles one 16-column subtile within the 32-column tile
+		const unsigned int tileCol = tileColBase + warpId * 16;
+		if (tileCol >= N) continue;
+		
+		// For 64x16 BCSR blocks, we need 4 WMMA operations vertically per warp
+		wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag0, a_frag1, a_frag2, a_frag3;
+		wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
+		wmma::fragment<wmma::accumulator, 16, 16, 16, float> c0, c1, c2, c3;
+		
+		wmma::fill_fragment(c0, 0.0f);  // rows 0-15
+		wmma::fill_fragment(c1, 0.0f);  // rows 16-31
+		wmma::fill_fragment(c2, 0.0f);  // rows 32-47
+		wmma::fill_fragment(c3, 0.0f);  // rows 48-63
+		
+		// Process all non-zero 64x16 blocks in this BCSR row
+		for (int k = hdr[bcsrRow]; k < hdr[bcsrRow + 1]; ++k) {
+			// Load B fragment for this warp's column range
+			wmma::load_matrix_sync(b_frag, B + static_cast<size_t>(idx[k]) * 16u * N + tileCol, N);
+			
+			// Load A fragments from different vertical positions within the 64x16 block
+			const half *block_data = data + static_cast<size_t>(k) * 64u * 16u;
+			wmma::load_matrix_sync(a_frag0, block_data + 0 * 16u * 16u, 16);   // rows 0-15
+			wmma::load_matrix_sync(a_frag1, block_data + 1 * 16u * 16u, 16);   // rows 16-31
+			wmma::load_matrix_sync(a_frag2, block_data + 2 * 16u * 16u, 16);   // rows 32-47
+			wmma::load_matrix_sync(a_frag3, block_data + 3 * 16u * 16u, 16);   // rows 48-63
+			
+			// Perform WMMA operations
+			wmma::mma_sync(c0, a_frag0, b_frag, c0);
+			wmma::mma_sync(c1, a_frag1, b_frag, c1);
+			wmma::mma_sync(c2, a_frag2, b_frag, c2);
+			wmma::mma_sync(c3, a_frag3, b_frag, c3);
+		}
+		
+		// Store results for this warp's column range
+		wmma::store_matrix_sync(C + static_cast<size_t>(blockRow64 + 0 * 16u) * N + tileCol, c0, N, wmma::mem_row_major);
+		wmma::store_matrix_sync(C + static_cast<size_t>(blockRow64 + 1 * 16u) * N + tileCol, c1, N, wmma::mem_row_major);
+		wmma::store_matrix_sync(C + static_cast<size_t>(blockRow64 + 2 * 16u) * N + tileCol, c2, N, wmma::mem_row_major);
+		wmma::store_matrix_sync(C + static_cast<size_t>(blockRow64 + 3 * 16u) * N + tileCol, c3, N, wmma::mem_row_major);
+	}
+}
