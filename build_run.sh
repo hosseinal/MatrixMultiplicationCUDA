@@ -18,7 +18,7 @@ cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j8
 
-./matrix_multiplication > ../matrix_multiplication_output.txt
+# ./matrix_multiplication > ../matrix_multiplication_output.txt
 
 ./matrix_multiplication_nvbench > ../matrix_multiplication_nvbench_output.txt
 
