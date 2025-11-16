@@ -1,3 +1,8 @@
+# TODO Working Items
+Trying to use mma PTX instructions insted of the project insted of old wmma.
+refolder and reconstruct the project.
+
+
 # CUDA Sparse Matrix Multiplication with Tensor Cores
 
 A high-performance CUDA implementation of sparse matrix multiplication using NVIDIA Tensor Cores (WMMA API) and various optimization techniques. This project benchmarks different sparse matrix multiplication algorithms using Block Compressed Sparse Row (BCSR) format with configurable block sizes.
