@@ -1,5 +1,6 @@
 # TODO Working Items
 Trying to use mma PTX instructions insted of the project insted of old wmma.
+
 refolder and reconstruct the project.
 
 
