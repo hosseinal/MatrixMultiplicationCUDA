@@ -75,6 +75,13 @@ __global__ void sparseMatrixMulTensor32x16(const int *hdr, const int *idx,
                                           const half *data, const half *B,
                                           float *C, const unsigned int M, const unsigned int N);
 
+// Variant: same as sparseMatrixMulTensor32x16 but stages A blocks into shared
+// memory first so each warp loads A from fast on-chip memory via WMMA API.
+// Launch with shared memory size at least 16*16*sizeof(half).
+__global__ void sparseMatrixMulTensor32x16_shared(const int *hdr, const int *idx,
+                                                  const half *data, const half *B,
+                                                  float *C, const unsigned int M, const unsigned int N);
+
 // 32x16 block size specific kernel v2 (v2-style for 32x16 blocks, uses 64 threads)
 __global__ void sparseMatrixMulTensor32x16_v2(const int *hdr, const int *idx,
                                               const half *data, const half *B,

@@ -724,6 +724,108 @@ static void bench_sparseMatrixMulTensor32x16_v2(nvbench::state &state) {
     state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
 }
 
+// Benchmark: sparseMatrixMulTensor32x16_shared (shared-memory staged A then WMMA)
+static void bench_sparseMatrixMulTensor32x16_shared(nvbench::state &state) {
+	const int M = static_cast<int>(state.get_int64("M"));
+	const int K = static_cast<int>(state.get_int64("K"));
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
+
+	auto buf = prepare_buffers(M, K, N, spars, pattern, 32, 16);
+
+	// grid.x corresponds to 32-column tiles (v2 pattern), grid.y to 32-row tiles
+	dim3 gridSize{static_cast<unsigned int>((N + 31) / 32), static_cast<unsigned int>((M + 31) / 32), 1};
+	dim3 blockSize{64, 1, 1};
+	const unsigned int sharedBytes = static_cast<unsigned int>(32 * 16 * sizeof(half));
+
+	state.add_element_count(static_cast<size_t>(M) * N);
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		timer.start();
+		sparseMatrixMulTensor32x16_shared<<<gridSize, blockSize, sharedBytes, launch.get_stream()>>>(
+			buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC,
+			static_cast<unsigned int>(M), static_cast<unsigned int>(N));
+		timer.stop();
+	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "[sparseMatrixMulTensor32x16_shared kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=32x16(shared)\n", M, K, N, spars*100.0, pattern.c_str());
+				std::abort();
+			}
+		}
+	}
+
+	state.get_summary("nv/cold/time/gpu/min").remove_value("hide");
+	state.get_summary("nv/cold/time/gpu/max").remove_value("hide");
+	state.get_summary("nv/cold/time/gpu/mean").remove_value("hide");
+	state.get_summary("nv/cold/time/cpu/mean").remove_value("hide");
+	state.get_summary("nv/cold/time/cpu/min").remove_value("hide");
+	state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
+}
+
+// Benchmark: sparseMatrixMulTensor32x16_shared_vectorized (shared B staged with vectorized loads)
+static void bench_sparseMatrixMulTensor32x16_shared_vectorized(nvbench::state &state) {
+	const int M = static_cast<int>(state.get_int64("M"));
+	const int K = static_cast<int>(state.get_int64("K"));
+	const int N = static_cast<int>(state.get_int64("N"));
+	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+	const double spars = sparsP / 100.0;
+	const std::string pattern = patterns.at(patIdx % patterns.size());
+
+	auto buf = prepare_buffers(M, K, N, spars, pattern, 32, 16);
+
+	// grid.x corresponds to 32-column tiles (v2 pattern), grid.y to 32-row tiles
+	dim3 gridSize{static_cast<unsigned int>((N + 31) / 32), static_cast<unsigned int>((M + 31) / 32), 1};
+	dim3 blockSize{64, 1, 1};
+	const unsigned int sharedBytes = static_cast<unsigned int>((32 * 16 + 16 * 32) * sizeof(half));
+
+	state.add_element_count(static_cast<size_t>(M) * N);
+	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+		cudaMemsetAsync(buf->gpuC, 0, static_cast<size_t>(M) * N * sizeof(float), launch.get_stream());
+		timer.start();
+		sparseMatrixMulTensor32x16_shared_vectorized<<<gridSize, blockSize, sharedBytes, launch.get_stream()>>>(
+			buf->gpuBCSRHdr, buf->gpuBCSRIdx, buf->gpuBCSRData, buf->gpuB_half, buf->gpuC,
+			static_cast<unsigned int>(M), static_cast<unsigned int>(N));
+		timer.stop();
+	});
+
+	// copy result back and verify on CPU
+	{
+		std::vector<float> out_host(static_cast<size_t>(M) * N);
+		cudaMemcpy(out_host.data(), buf->gpuC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+		std::vector<float> ref;
+		cpu_matmul_ref(buf->matrixA, buf->matrixB, ref);
+		const float eps = 1e-2f;
+		for (size_t i = 0; i < out_host.size(); ++i) {
+			if (std::fabs(out_host[i] - ref[i]) > eps) {
+				std::fprintf(stderr, "[sparseMatrixMulTensor32x16_shared_vectorized kernel] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+				std::fprintf(stderr, "Test specs: M=%d K=%d N=%d sparsity=%.1f%% pattern=%s block_size=32x16(shared_vectorized)\n", M, K, N, spars*100.0, pattern.c_str());
+				std::abort();
+			}
+		}
+	}
+
+	state.get_summary("nv/cold/time/gpu/min").remove_value("hide");
+	state.get_summary("nv/cold/time/gpu/max").remove_value("hide");
+	state.get_summary("nv/cold/time/gpu/mean").remove_value("hide");
+	state.get_summary("nv/cold/time/cpu/mean").remove_value("hide");
+	state.get_summary("nv/cold/time/cpu/min").remove_value("hide");
+	state.get_summary("nv/cold/time/cpu/max").remove_value("hide");
+}
+
 // Benchmark: sparseMatrixMulTensor64x16_v2 (v2-style for 64x16 blocks)
 static void bench_sparseMatrixMulTensor64x16_v2(nvbench::state &state) {
 	const int M = static_cast<int>(state.get_int64("M"));
@@ -1119,6 +1221,8 @@ NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16).set_name("sparseMatrixMulTensor3
 NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16_v2).set_name("sparseMatrixMulTensor32x16_v2").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {6});
 NVBENCH_BENCH(bench_sparseMatrixMulTensorAdaptive).set_name("sparseMatrixMulTensorAdaptive_16x16").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {5});
 NVBENCH_BENCH(bench_sparseMatrixMulTensorAdaptive32x16).set_name("sparseMatrixMulTensorAdaptive_32x16").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {6});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16_shared_vectorized).set_name("sparseMatrixMulTensor32x16_shared_vectorized").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {6});
+NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16_shared).set_name("sparseMatrixMulTensor32x16_shared").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {6});
 
 // Repeated registrations for requested size list (no changes to the templates; M/K set per pair)
 // 1: 1024x256

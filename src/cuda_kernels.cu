@@ -1,5 +1,88 @@
 #include "cuda_kernels.cuh"
 
+// Vectorized loader for B (dense) into shared tile.
+template <typename T, size_t BLOCK_TILE_SIZE_X, size_t BLOCK_TILE_SIZE_K,
+		  size_t NUM_THREADS, size_t BLOCK_TILE_SKEW_SIZE_X = 0U,
+		  typename VECTOR_TYPE = int4>
+__device__ void load_B_to_shared_vectorized(
+	T const* B, size_t ldb,
+	T B_thread_block_tile[BLOCK_TILE_SIZE_K]
+						 [BLOCK_TILE_SIZE_X + BLOCK_TILE_SKEW_SIZE_X],
+	size_t thread_block_tile_idx, size_t thread_linear_idx, size_t n, size_t k)
+{
+	constexpr size_t NUM_VECTOR_UNITS{sizeof(VECTOR_TYPE) / sizeof(T)};
+	static_assert(sizeof(VECTOR_TYPE) % sizeof(T) == 0U);
+	static_assert(BLOCK_TILE_SIZE_K % NUM_VECTOR_UNITS == 0U);
+	static_assert(BLOCK_TILE_SIZE_X % NUM_VECTOR_UNITS == 0U);
+	constexpr size_t VECTORIZED_BLOCK_TILE_SIZE_X{BLOCK_TILE_SIZE_X / NUM_VECTOR_UNITS};
+	constexpr size_t VECTORIZED_BLOCK_TILE_SIZE_K{BLOCK_TILE_SIZE_K / NUM_VECTOR_UNITS};
+
+	static_assert((BLOCK_TILE_SIZE_X) * sizeof(T) % sizeof(VECTOR_TYPE) == 0U);
+	static_assert((BLOCK_TILE_SIZE_X + BLOCK_TILE_SKEW_SIZE_X) * sizeof(T) % sizeof(VECTOR_TYPE) == 0U);
+
+	// Each thread cooperatively loads vectors forming the B tile.
+#pragma unroll
+	for (size_t load_idx{0U};
+		 load_idx < (BLOCK_TILE_SIZE_K * VECTORIZED_BLOCK_TILE_SIZE_X + NUM_THREADS - 1U) / NUM_THREADS;
+		 ++load_idx)
+	{
+		size_t const B_thread_block_tile_row_idx{
+			(thread_linear_idx + load_idx * NUM_THREADS) / VECTORIZED_BLOCK_TILE_SIZE_X};
+		size_t const B_thread_block_tile_col_idx{
+			((thread_linear_idx + load_idx * NUM_THREADS) % VECTORIZED_BLOCK_TILE_SIZE_X) * NUM_VECTOR_UNITS};
+
+		size_t const B_row_idx{thread_block_tile_idx * BLOCK_TILE_SIZE_K + B_thread_block_tile_row_idx};
+		size_t const B_col_idx{blockIdx.x * BLOCK_TILE_SIZE_X + B_thread_block_tile_col_idx};
+
+		VECTOR_TYPE B_row_vector_vals{};
+		if (B_row_idx < k && B_col_idx < n) {
+			B_row_vector_vals = *reinterpret_cast<VECTOR_TYPE const*>(&B[B_row_idx * ldb + B_col_idx]);
+		}
+		if (B_col_idx + NUM_VECTOR_UNITS > n) {
+			size_t const num_invalid_elements{B_col_idx + NUM_VECTOR_UNITS - n};
+			T* const B_row_vector_vals_ptr{reinterpret_cast<T*>(&B_row_vector_vals)};
+			for (size_t i{0U}; i < num_invalid_elements; ++i) {
+				B_row_vector_vals_ptr[NUM_VECTOR_UNITS - 1U - i] = static_cast<T>(0);
+			}
+		}
+
+		if (B_thread_block_tile_row_idx < BLOCK_TILE_SIZE_K &&
+			B_thread_block_tile_col_idx < BLOCK_TILE_SIZE_X) {
+			*reinterpret_cast<VECTOR_TYPE*>(&B_thread_block_tile[B_thread_block_tile_row_idx]
+											  [B_thread_block_tile_col_idx]) = B_row_vector_vals;
+		}
+	}
+}
+
+// Vectorized loader for a 32x16 A block into shared memory (row-major).
+// - block_ptr: pointer to global block (32 rows x 16 cols) stored row-major
+// - sA_ptr: pointer to shared memory buffer (same layout)
+// - thread_linear_idx, num_threads: used to distribute vector loads across threads
+template <typename T, typename VECTOR_TYPE = int4>
+__device__ void load_A_block_32x16_vectorized(const T* block_ptr, T* sA_ptr,
+											  unsigned int thread_linear_idx,
+											  unsigned int num_threads)
+{
+	using VECTOR_TYPE_LOCAL = VECTOR_TYPE;
+	constexpr size_t BLOCK_ROWS = 32u;
+	constexpr size_t BLOCK_COLS = 16u;
+	constexpr size_t NUM_VECTOR_UNITS = sizeof(VECTOR_TYPE_LOCAL) / sizeof(T);
+	static_assert(BLOCK_COLS % NUM_VECTOR_UNITS == 0U, "BLOCK_COLS must be divisible by vector width");
+	constexpr size_t VECTORIZED_COLS = BLOCK_COLS / NUM_VECTOR_UNITS;
+
+	const size_t total_vector_loads = BLOCK_ROWS * VECTORIZED_COLS;
+	for (size_t load = thread_linear_idx; load < total_vector_loads; load += num_threads) {
+		const size_t row = load / VECTORIZED_COLS;
+		const size_t vcol = load % VECTORIZED_COLS;
+		const size_t col = vcol * NUM_VECTOR_UNITS;
+		// read vector from global block (row-major)
+		VECTOR_TYPE_LOCAL vec = *reinterpret_cast<const VECTOR_TYPE_LOCAL*>(block_ptr + row * BLOCK_COLS + col);
+		// write vector into shared memory (same row-major layout)
+		*reinterpret_cast<VECTOR_TYPE_LOCAL*>(sA_ptr + row * BLOCK_COLS + col) = vec;
+	}
+}
+
+
 // Dense matrix multiplication for rectangular A(MxN) * B(NxZ) = C(MxZ)
 __global__ void denseMatrixMul(const half *d_A, const half *d_B, float *d_C,
 							   const unsigned int M, const unsigned int N, const unsigned int Z) {
@@ -673,6 +756,178 @@ __global__ void sparseMatrixMulTensor32x16(const int *hdr, const int *idx,
 		wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 1 * 16u) * N + outCol, c1, N, wmma::mem_row_major);
 
 		// Store second column tile (16-31) if within bounds
+		if (tileCol + 16 < N) {
+			wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 0 * 16u) * N + outCol + 16, c2, N, wmma::mem_row_major);
+			wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 1 * 16u) * N + outCol + 16, c3, N, wmma::mem_row_major);
+		}
+	}
+}
+
+			// Variant: same as `sparseMatrixMulTensor32x16` but stages the 32x16 A block into
+			// shared memory first so both fragments (rows 0-15 and 16-31) are loaded from
+			// fast on-chip memory via the WMMA API. Launch with shared memory size at
+			// least `32*16*sizeof(half)` per block.
+			__global__ void sparseMatrixMulTensor32x16_shared(const int *hdr, const int *idx,
+															  const half *data, const half *B,
+															  float *C, const unsigned int M, const unsigned int N) {
+				// Each block covers 32 rows and 32 columns (for B reuse)
+				const unsigned int blockRow32 = blockIdx.y * 32u;
+				const unsigned int tileCol = blockIdx.x * 32u;
+
+				if (blockRow32 >= M || tileCol >= N) return;
+
+				// Shared memory buffer for the 32x16 A block (row-major): 32*16 half elements
+				extern __shared__ half sA[]; // size (elements) = 32*16 == 512
+
+				// WMMA fragments
+				wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag0, a_frag1;
+				wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag, b_frag1;
+				wmma::fragment<wmma::accumulator, 16, 16, 16, float> c0, c1, c2, c3;
+
+				wmma::fill_fragment(c0, 0.0f);
+				wmma::fill_fragment(c1, 0.0f);
+				wmma::fill_fragment(c2, 0.0f);
+				wmma::fill_fragment(c3, 0.0f);
+
+				const int blockRowIdx = static_cast<int>(blockRow32 / 32u);
+
+				// Iterate over non-zero 32x16 BCSR blocks in this block-row
+				for (int k = hdr[blockRowIdx]; k < hdr[blockRowIdx + 1]; ++k) {
+					// Pointer to the contiguous 32x16 block in global memory
+					const half *block_data = data + static_cast<size_t>(k) * 32u * 16u;
+
+					// Cooperative load of the whole 32x16 block into shared memory
+					const unsigned int elems = 32u * 16u; // 512
+					for (unsigned int i = threadIdx.x; i < elems; i += blockDim.x) {
+						sA[i] = block_data[i];
+					}
+					__syncthreads();
+
+					// Load B fragments (same for both A sub-blocks)
+					const size_t b_off = static_cast<size_t>(idx[k]) * 16u * static_cast<size_t>(N) + static_cast<size_t>(tileCol);
+					wmma::load_matrix_sync(b_frag, B + b_off, N);
+					if (tileCol + 16 < N) {
+						wmma::load_matrix_sync(b_frag1, B + b_off + 16, N);
+					}
+
+					// Load A fragments from shared memory: first 16x16 (rows 0-15), then next 16x16 (rows 16-31)
+					// Each 16x16 block occupies 256 half elements; layout matches original contiguous layout.
+					const half *sA0 = sA + 0 * (16u * 16u);
+					const half *sA1 = sA + 1 * (16u * 16u);
+
+					wmma::load_matrix_sync(a_frag0, sA0, 16);
+					wmma::load_matrix_sync(a_frag1, sA1, 16);
+
+					// Perform WMMA operations for first column tile (0-15)
+					wmma::mma_sync(c0, a_frag0, b_frag, c0);
+					wmma::mma_sync(c1, a_frag1, b_frag, c1);
+
+					// Perform WMMA operations for second column tile (16-31) if within bounds
+					if (tileCol + 16 < N) {
+						wmma::mma_sync(c2, a_frag0, b_frag1, c2);
+						wmma::mma_sync(c3, a_frag1, b_frag1, c3);
+					}
+
+					__syncthreads();
+				}
+
+				// Store results for all 4 accumulator fragments
+				const unsigned int outCol = tileCol;
+				if (outCol < N) {
+					// Store first column tile (0-15)
+					wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 0 * 16u) * N + outCol, c0, N, wmma::mem_row_major);
+					wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 1 * 16u) * N + outCol, c1, N, wmma::mem_row_major);
+
+					// Store second column tile (16-31) if within bounds
+					if (tileCol + 16 < N) {
+						wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 0 * 16u) * N + outCol + 16, c2, N, wmma::mem_row_major);
+						wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 1 * 16u) * N + outCol + 16, c3, N, wmma::mem_row_major);
+					}
+				}
+			}
+
+// Kernel: sparseMatrixMulTensor32x16_shared_vectorized
+// Stages B (16x32 tile) into shared memory using vectorized loads, and uses
+// existing A block layout (32x16) from global `data`. Shared memory layout:
+//  - sA: 32x16 elements (for A staging, optional)
+//  - sB: 16x32 elements (for B tile, vectorized load)
+// Launch with blockSize {64,1,1} and sharedBytes = (32*16 + 16*32) * sizeof(half)
+__global__ void sparseMatrixMulTensor32x16_shared_vectorized(const int *hdr, const int *idx,
+															const half *data, const half *B,
+															float *C, const unsigned int M, const unsigned int N) {
+	const unsigned int blockRow32 = blockIdx.y * 32u;
+	const unsigned int tileCol = blockIdx.x * 32u;
+
+	if (blockRow32 >= M || tileCol >= N) return;
+
+	// dynamic shared buffer: first sA (32*16), then sB (16*32)
+	extern __shared__ half s[];
+	half *sA = s;                        // 32*16 elements
+	half *sB_raw = s + 32 * 16;         // points to 16*32 elements
+	half (*sB)[32] = reinterpret_cast<half (*)[32]>(sB_raw);
+
+	// WMMA fragments
+	wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag0, a_frag1;
+	wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag, b_frag1;
+	wmma::fragment<wmma::accumulator, 16, 16, 16, float> c0, c1, c2, c3;
+
+	wmma::fill_fragment(c0, 0.0f);
+	wmma::fill_fragment(c1, 0.0f);
+	wmma::fill_fragment(c2, 0.0f);
+	wmma::fill_fragment(c3, 0.0f);
+
+	const int blockRowIdx = static_cast<int>(blockRow32 / 32u);
+
+	// Load A block into shared memory using the vectorized helper
+
+	// Iterate over non-zero 32x16 BCSR blocks in this block-row
+	for (int k = hdr[blockRowIdx]; k < hdr[blockRowIdx + 1]; ++k) {
+		// Pointer to the contiguous 32x16 block in global memory (A)
+		const half *block_data = data + static_cast<size_t>(k) * 32u * 16u;
+
+		// Vectorized load A block into shared memory sA
+		load_A_block_32x16_vectorized<half, int4>(block_data, sA, threadIdx.x, blockDim.x);
+		__syncthreads();
+
+		// Vectorized load B tile (16 rows x 32 cols) into shared memory sB
+		// Use template with BLOCK_TILE_SIZE_X=32, BLOCK_TILE_SIZE_K=16, NUM_THREADS=64
+		load_B_to_shared_vectorized<half, 32, 16, 64, 0, int4>(B, static_cast<size_t>(N),
+															  reinterpret_cast<half (*)[32]>(sB),
+															  static_cast<size_t>(idx[k]), static_cast<size_t>(threadIdx.x),
+															  static_cast<size_t>(N), static_cast<size_t>(-1));
+		__syncthreads();
+
+		// Load B fragments from shared memory. Leading dimension is 32.
+		wmma::load_matrix_sync(b_frag, &sB[0][0], 32);
+		if (tileCol + 16 < N) {
+			wmma::load_matrix_sync(b_frag1, &sB[0][16], 32);
+		}
+
+		// Load A fragments from shared memory: first 16x16 (rows 0-15), then next 16x16 (rows 16-31)
+		const half *sA0 = sA + 0 * (16u * 16u);
+		const half *sA1 = sA + 1 * (16u * 16u);
+
+		wmma::load_matrix_sync(a_frag0, sA0, 16);
+		wmma::load_matrix_sync(a_frag1, sA1, 16);
+
+		// Perform WMMA operations for first column tile (0-15)
+		wmma::mma_sync(c0, a_frag0, b_frag, c0);
+		wmma::mma_sync(c1, a_frag1, b_frag, c1);
+
+		// Perform WMMA operations for second column tile (16-31) if within bounds
+		if (tileCol + 16 < N) {
+			wmma::mma_sync(c2, a_frag0, b_frag1, c2);
+			wmma::mma_sync(c3, a_frag1, b_frag1, c3);
+		}
+
+		__syncthreads();
+	}
+
+	// Store results for all 4 accumulator fragments
+	const unsigned int outCol = tileCol;
+	if (outCol < N) {
+		wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 0 * 16u) * N + outCol, c0, N, wmma::mem_row_major);
+		wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 1 * 16u) * N + outCol, c1, N, wmma::mem_row_major);
 		if (tileCol + 16 < N) {
 			wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 0 * 16u) * N + outCol + 16, c2, N, wmma::mem_row_major);
 			wmma::store_matrix_sync(C + static_cast<size_t>(blockRow32 + 1 * 16u) * N + outCol + 16, c3, N, wmma::mem_row_major);
