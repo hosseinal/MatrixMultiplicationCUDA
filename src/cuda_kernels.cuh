@@ -82,6 +82,11 @@ __global__ void sparseMatrixMulTensor32x16_shared(const int *hdr, const int *idx
                                                   const half *data, const half *B,
                                                   float *C, const unsigned int M, const unsigned int N);
 
+// Variant: stages B into shared memory using vectorized loads and stages A from BCSR into shared memory
+__global__ void sparseMatrixMulTensor32x16_shared_vectorized(const int *hdr, const int *idx,
+                                                              const half *data, const half *B,
+                                                              float *C, const unsigned int M, const unsigned int N);
+
 // 32x16 block size specific kernel v2 (v2-style for 32x16 blocks, uses 64 threads)
 __global__ void sparseMatrixMulTensor32x16_v2(const int *hdr, const int *idx,
                                               const half *data, const half *B,

@@ -15,7 +15,6 @@ __device__ void load_B_to_shared_vectorized(
 	static_assert(BLOCK_TILE_SIZE_K % NUM_VECTOR_UNITS == 0U);
 	static_assert(BLOCK_TILE_SIZE_X % NUM_VECTOR_UNITS == 0U);
 	constexpr size_t VECTORIZED_BLOCK_TILE_SIZE_X{BLOCK_TILE_SIZE_X / NUM_VECTOR_UNITS};
-	constexpr size_t VECTORIZED_BLOCK_TILE_SIZE_K{BLOCK_TILE_SIZE_K / NUM_VECTOR_UNITS};
 
 	static_assert((BLOCK_TILE_SIZE_X) * sizeof(T) % sizeof(VECTOR_TYPE) == 0U);
 	static_assert((BLOCK_TILE_SIZE_X + BLOCK_TILE_SKEW_SIZE_X) * sizeof(T) % sizeof(VECTOR_TYPE) == 0U);
@@ -502,7 +501,6 @@ __global__ void sparseMatrixMulTensor_v1_improved(const int * __restrict__ hdr, 
 	if (warpRow >= M || tileColBase >= N) return;
 
 	const unsigned int warpId = threadIdx.x / 32u; // 0 or 1
-	const unsigned int laneId = threadIdx.x & 31u;
 
 	extern __shared__ half sA[]; // 16*16 elements (256)
 
