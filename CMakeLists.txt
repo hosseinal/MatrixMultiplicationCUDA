@@ -68,14 +68,14 @@ add_executable(matrix_multiplication_nvbench
     nvbench_main.cu
     Matrix.cuh
     Matrix.cu
-    CSRMatrix.cu
-    CSRMatrix.cuh
-    BCSRMatrix.cu
-    BCSRMatrix.cuh
+    formats/CSRMatrix.cu
+    formats/CSRMatrix.cuh
+    formats/BCSRMatrix.cu
+    formats/BCSRMatrix.cuh
     miscutil.cpp
     miscutil.h
-    HCSRMatrix.cpp
-    HCSRMatrix.h
+    formats/HCSRMatrix.cpp
+    formats/HCSRMatrix.h
     src/cuda_kernels.cuh
     src/cuda_kernels.cu
 )

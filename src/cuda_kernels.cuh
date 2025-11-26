@@ -92,6 +92,11 @@ __global__ void sparseMatrixMulTensor32x16_v2(const int *hdr, const int *idx,
                                               const half *data, const half *B,
                                               float *C, const unsigned int M, const unsigned int N);
 
+// Variant: v2-style (64 threads) but stages both A and B into shared memory using vectorized loads
+__global__ void sparseMatrixMulTensor32x16_v2_shared_vectorized(const int *hdr, const int *idx,
+                                                                 const half *data, const half *B,
+                                                                 float *C, const unsigned int M, const unsigned int N);
+
 // Adaptive BCSR kernels that balance load based on matrix aspect ratio
 __global__ void sparseMatrixMulTensorAdaptive(const int *hdr, const int *idx,
                                               const half *data, const half *B,

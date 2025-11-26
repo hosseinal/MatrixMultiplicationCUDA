@@ -10,9 +10,9 @@
 #include <cooperative_groups.h>
 #include <cuda/barrier>
 
-#include "BCSRMatrix.cuh"
-#include "CSRMatrix.cuh"
-#include "HCSRMatrix.h"
+#include "formats/BCSRMatrix.cuh"
+#include "formats/CSRMatrix.cuh"
+#include "formats/HCSRMatrix.h"
 #include "Matrix.cuh"
 #include "miscutil.h"
 #include "src/cuda_kernels.cuh"
