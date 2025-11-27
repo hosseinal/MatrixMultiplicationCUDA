@@ -4,7 +4,7 @@
 
 #include "HCSRMatrix.h"
 
-#include "miscutil.h"
+#include "../miscutil.h"
 
 extern const int BLOCK_SIZE;
 
