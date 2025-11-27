@@ -66,6 +66,10 @@ CPMAddPackage("gh:NVIDIA/nvbench#main")
 
 add_executable(matrix_multiplication_nvbench
     nvbench_main.cu
+    cute/gemm_cute_tensor.cu
+    cute/gemm_cute_simt.cu
+    cute/gemm_cute_tensor.cuh
+    cute/gemm_cute_simt.cuh
     Matrix.cuh
     Matrix.cu
     formats/CSRMatrix.cu
@@ -86,4 +90,7 @@ target_compile_definitions(matrix_multiplication_nvbench PRIVATE USE_NVBENCH)
 if(DEFINED NVBENCH_INCLUDE_DIR)
     target_include_directories(matrix_multiplication_nvbench PRIVATE ${NVBENCH_INCLUDE_DIR})
 endif()
-target_link_libraries(matrix_multiplication_nvbench PRIVATE nvbench::main CUDA::cusparse stdc++ -lcublas -lcurand)
+
+# Expose local CUTE headers to the target so callers can `#include "cute/..."`
+target_include_directories(matrix_multiplication_nvbench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cute)
+target_link_libraries(matrix_multiplication_nvbench PRIVATE nvbench::main CUDA::cudart CUDA::cusparse stdc++ -lcublas -lcurand)
