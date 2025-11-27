@@ -4,8 +4,8 @@
 
 #ifndef HCSRMATRIX_H
 #define HCSRMATRIX_H
-#include "formats/BCSRMatrix.cuh"
-#include "formats/CSRMatrix.cuh"
+#include "BCSRMatrix.cuh"
+#include "CSRMatrix.cuh"
 
 /**
  * Hybrid BCSR Matrix

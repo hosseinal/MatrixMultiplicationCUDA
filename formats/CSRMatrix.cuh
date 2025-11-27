@@ -8,7 +8,7 @@
 #include <cuda_fp16.h>
 #include <string>
 
-#include "Matrix.cuh"
+#include "../Matrix.cuh"
 
 class CSRMatrix {
 public:

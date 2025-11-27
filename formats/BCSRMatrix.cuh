@@ -4,7 +4,7 @@
 
 #ifndef BCSRMATRIX_CUH
 #define BCSRMATRIX_CUH
-#include "Matrix.cuh"
+#include "../Matrix.cuh"
 
 class BCSRMatrix {
 public:
