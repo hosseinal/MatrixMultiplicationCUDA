@@ -3,6 +3,7 @@
 #include <nvbench/nvbench.cuh>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <thrust/host_vector.h>
 #include <vector>
 #include <string>
 #include <memory>
