@@ -162,3 +162,13 @@ block0()
 }
 
 }  // end namespace cute
+
+// Small convenience to initialize CUDA device used by tests
+inline void device_init(int dev = 0) {
+  cudaError_t err = cudaSetDevice(dev);
+  if (err != cudaSuccess) {
+    fprintf(stderr, "cudaSetDevice(%d) failed: %s\n", dev, cudaGetErrorString(err));
+    fflush(stderr);
+    exit(1);
+  }
+}

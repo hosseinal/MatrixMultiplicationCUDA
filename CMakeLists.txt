@@ -41,6 +41,7 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 # )
 
 find_package(CUDAToolkit REQUIRED)
+find_package(Threads REQUIRED)
 
 # target_link_libraries(matrix_multiplication CUDA::cusparse stdc++ -lcublas
 #         -lcurand)
@@ -99,4 +100,4 @@ target_include_directories(matrix_multiplication_nvbench PRIVATE
 )
 target_compile_definitions(matrix_multiplication_nvbench PRIVATE HAVE_CUTE)
 
-target_link_libraries(matrix_multiplication_nvbench PRIVATE nvbench::main CUDA::cudart CUDA::cusparse stdc++ -lcublas -lcurand)
+target_link_libraries(matrix_multiplication_nvbench PRIVATE nvbench::main CUDA::cudart CUDA::cusparse stdc++ -lcublas -lcurand Threads::Threads)
