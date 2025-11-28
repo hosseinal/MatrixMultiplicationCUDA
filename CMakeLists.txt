@@ -100,4 +100,11 @@ target_include_directories(matrix_multiplication_nvbench PRIVATE
 )
 target_compile_definitions(matrix_multiplication_nvbench PRIVATE HAVE_CUTE)
 
+# Ensure POSIX semaphore symbols are visible and compile with pthreads
+target_compile_definitions(matrix_multiplication_nvbench PRIVATE _POSIX_C_SOURCE=200809L)
+target_compile_options(matrix_multiplication_nvbench PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-pthread>
+    $<$<COMPILE_LANGUAGE:CXX>:-pthread>
+)
+
 target_link_libraries(matrix_multiplication_nvbench PRIVATE nvbench::main CUDA::cudart CUDA::cusparse stdc++ -lcublas -lcurand Threads::Threads)

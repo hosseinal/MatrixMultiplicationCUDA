@@ -164,6 +164,7 @@ block0()
 }  // end namespace cute
 
 // Small convenience to initialize CUDA device used by tests
+namespace cute {
 inline void device_init(int dev = 0) {
   cudaError_t err = cudaSetDevice(dev);
   if (err != cudaSuccess) {
@@ -172,3 +173,4 @@ inline void device_init(int dev = 0) {
     exit(1);
   }
 }
+} // namespace cute
