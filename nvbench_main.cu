@@ -33,8 +33,8 @@
 #include "formats/BCSRMatrix.cuh"
 
 // CUTE GEMM wrapper prototypes
-#include "cute/gemm_cute_tensor.cuh"
-#include "cute/gemm_cute_simt.cuh"
+#include "cute_test/gemm_cute_tensor.cuh"
+#include "cute_test/gemm_cute_simt.cuh"
 
 
 
