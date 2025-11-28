@@ -15,12 +15,10 @@ Matrix::Matrix(const string &filename) {
     this->rows = this->cols = this->nonZeros = 0;
 
     float v;
-    freopen(filename.c_str(), "r", stdin);
-
-    if (freopen(filename.c_str(), "r", stdin) == NULL) {
-    //print the file name and error
-    std::cerr << "Error opening file: " << filename << std::endl;
-    perror("Error opening file");
+    FILE *f = freopen(filename.c_str(), "r", stdin);
+    if (f == NULL) {
+        std::cerr << "Error opening file: " << filename << std::endl;
+        perror("Error opening file");
     }
 
     std::cin >> rows >> cols;

@@ -7,7 +7,7 @@
     error = cudaGetLastError(); \
     if (error != cudaSuccess) \
         std::cout << _where << " CUDA " \
-        "error: " << cudaGetErrorString(error) << '\\n'; \
+        "error: " << cudaGetErrorString(error) << "\n"; \
     assert(error == cudaSuccess);
 
 CSRMatrix::CSRMatrix(const Matrix &matrix) {

@@ -1,3 +1,4 @@
+#include <semaphore.h>
 // nvbench harness to run selected kernels from main.cu across patterns/sizes/sparsities
 #include <nvbench/nvbench.cuh>
 #include <cuda_runtime.h>
@@ -48,10 +49,9 @@ using namespace nvcuda;
 // Local constant to match main.cu's thread configuration
 constexpr unsigned int N_THREADS = 32;
 
-// Provide BLOCK_SIZE definition with external linkage for translation units that expect it.
-// main.cu defines this for the application; nvbench builds a separate TU so
-// we provide the same externally-linked symbol here.
-extern const int BLOCK_SIZE = 16;
+// Provide BLOCK_SIZE for this TU. Keep internal linkage to avoid ODR violations
+// when building multiple translation units that may also define BLOCK_SIZE.
+static const int BLOCK_SIZE = 16;
 
 static const std::vector<std::string> patterns = {
 	"random",

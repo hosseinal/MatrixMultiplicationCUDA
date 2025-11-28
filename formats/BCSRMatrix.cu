@@ -15,7 +15,7 @@ extern const int BLOCK_SIZE;
 #define ASSERT_CUDA_SUCCESS error = cudaGetLastError(); \
                             if (error != cudaSuccess) \
                             cout << "BCSRMatrix::copyToDevice CUDA " \
-                            "error: " << cudaGetErrorString(error) << '\\n'; \
+                            "error: " << cudaGetErrorString(error) << "\n"; \
                             assert(error == cudaSuccess);
 
 
