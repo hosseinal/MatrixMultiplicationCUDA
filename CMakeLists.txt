@@ -92,5 +92,4 @@ if(DEFINED NVBENCH_INCLUDE_DIR)
 endif()
 
 # Expose local CUTE headers to the target so callers can `#include "cute/..."`
-target_include_directories(matrix_multiplication_nvbench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cute)
 target_link_libraries(matrix_multiplication_nvbench PRIVATE nvbench::main CUDA::cudart CUDA::cusparse stdc++ -lcublas -lcurand)
