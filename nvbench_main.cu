@@ -1,4 +1,3 @@
-#include <semaphore.h>
 // nvbench harness to run selected kernels from main.cu across patterns/sizes/sparsities
 #include <nvbench/nvbench.cuh>
 #include <cuda_runtime.h>
