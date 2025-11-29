@@ -1,7 +1,3 @@
-// Ensure POSIX features (sem_t, sem_* APIs) are exposed from headers
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200809L
-#endif
 #include <semaphore.h>
 // nvbench harness to run selected kernels from main.cu across patterns/sizes/sparsities
 #include <nvbench/nvbench.cuh>

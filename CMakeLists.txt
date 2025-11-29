@@ -99,8 +99,7 @@ endif()
 
 # Expose local CUTE/CUTLASS headers (required)
 target_include_directories(matrix_multiplication_nvbench PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/cute
-    ${CMAKE_CURRENT_SOURCE_DIR}/cutlass
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_compile_definitions(matrix_multiplication_nvbench PRIVATE HAVE_CUTE)
 
