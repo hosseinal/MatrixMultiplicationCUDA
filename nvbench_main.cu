@@ -36,6 +36,7 @@
 // CUTE GEMM wrapper prototypes
 #include "cute_test/gemm_cute_tensor.cuh"
 #include "cute_test/gemm_cute_simt.cuh"
+#include "cutlass/semaphore.h"
 
 
 
