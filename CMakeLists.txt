@@ -1,25 +1,23 @@
 cmake_minimum_required(VERSION 3.30 FATAL_ERROR)
 
-# set host compiler
-set(CMAKE_CXX_STANDARD 14)
+# --- CHANGE 1: Update Host Compiler Standard to 17 (Required for nvbench) ---
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set CUDA architectures (override by passing -DCMAKE_CUDA_ARCHITECTURES="..." to cmake)
-# Note: some older CUDA toolkits / nvcc do not recognize very recent SM targets
-# (e.g. compute_89). Set a conservative default here and allow users to override it.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 70 75 80 86)
 endif()
 
 project(MatrixMultiplicationCUDA LANGUAGES CXX CUDA)
 
-# Set CUDA specific flags
-set(CMAKE_CUDA_STANDARD 14)
+# --- CHANGE 2: Update Device Compiler Standard to 17 (Fixes sem_t error) ---
+set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 #add_compile_definitions(CHECK_CORRECTNESS)
 
-# Add executable
+# Add executable (Commented out as per your original file)
 # add_executable(matrix_multiplication main.cu
 #         Matrix.cuh
 #         Matrix.cu
@@ -84,9 +82,16 @@ add_executable(matrix_multiplication_nvbench
     src/cuda_kernels.cuh
     src/cuda_kernels.cu
 )
-set_target_properties(matrix_multiplication_nvbench PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-set_target_properties(matrix_multiplication_nvbench PROPERTIES CXX_STANDARD 17)
+
+# --- CHANGE 3: Enforce Standards on the specific target ---
+set_target_properties(matrix_multiplication_nvbench PROPERTIES 
+    CUDA_SEPARABLE_COMPILATION ON
+    CXX_STANDARD 17
+    CUDA_STANDARD 17
+)
+
 target_compile_definitions(matrix_multiplication_nvbench PRIVATE USE_NVBENCH)
+
 # If nvbench headers are not in a standard location, set NVBENCH_INCLUDE_DIR when running cmake
 if(DEFINED NVBENCH_INCLUDE_DIR)
     target_include_directories(matrix_multiplication_nvbench PRIVATE ${NVBENCH_INCLUDE_DIR})
@@ -96,12 +101,13 @@ endif()
 target_include_directories(matrix_multiplication_nvbench PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/cute
     ${CMAKE_CURRENT_SOURCE_DIR}/cutlass
-    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_compile_definitions(matrix_multiplication_nvbench PRIVATE HAVE_CUTE)
 
 # Ensure POSIX semaphore symbols are visible and compile with pthreads
 target_compile_definitions(matrix_multiplication_nvbench PRIVATE _POSIX_C_SOURCE=200809L)
+
+# Keep these manual flags; they ensure -pthread is passed to the host compiler via nvcc
 target_compile_options(matrix_multiplication_nvbench PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-pthread>
     $<$<COMPILE_LANGUAGE:CXX>:-pthread>
