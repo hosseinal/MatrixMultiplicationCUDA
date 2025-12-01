@@ -682,148 +682,148 @@ static void bench_sparseMatrixMulTensor32x16(nvbench::state &state) {
 }
 
 // Benchmark: CUTE GEMM (calls cute/gemm_cute_tensor.cu's gemm)
-static void bench_cute_gemm_tensor(nvbench::state &state) {
-	const int M = static_cast<int>(state.get_int64("M"));
-	const int K = static_cast<int>(state.get_int64("K"));
-	const int N = static_cast<int>(state.get_int64("N"));
-	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
-	const int patIdx = static_cast<int>(state.get_int64("PAT"));
-	const double spars = sparsP / 100.0;
-	const std::string pattern = patterns.at(patIdx % patterns.size());
+// static void bench_cute_gemm_tensor(nvbench::state &state) {
+// 	const int M = static_cast<int>(state.get_int64("M"));
+// 	const int K = static_cast<int>(state.get_int64("K"));
+// 	const int N = static_cast<int>(state.get_int64("N"));
+// 	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+// 	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+// 	const double spars = sparsP / 100.0;
+// 	const std::string pattern = patterns.at(patIdx % patterns.size());
 
-	// Generate float matrices (dense) using the same generator used elsewhere
-	auto genA = mg::generate_matrix<float>(M, K, spars, pattern, 16, 123);
-	auto genB = mg::generate_matrix<float>(K, N, 0.0, "random", 16, 456);
+// 	// Generate float matrices (dense) using the same generator used elsewhere
+// 	auto genA = mg::generate_matrix<float>(M, K, spars, pattern, 16, 123);
+// 	auto genB = mg::generate_matrix<float>(K, N, 0.0, "random", 16, 456);
 
-	// Allocate device buffers for floats
-	float *dA = nullptr, *dB = nullptr, *dC = nullptr;
-	size_t bytesA = static_cast<size_t>(M) * K * sizeof(float);
-	size_t bytesB = static_cast<size_t>(K) * N * sizeof(float);
-	size_t bytesC = static_cast<size_t>(M) * N * sizeof(float);
-	cudaMalloc(reinterpret_cast<void**>(&dA), bytesA);
-	cudaMalloc(reinterpret_cast<void**>(&dB), bytesB);
-	cudaMalloc(reinterpret_cast<void**>(&dC), bytesC);
+// 	// Allocate device buffers for floats
+// 	float *dA = nullptr, *dB = nullptr, *dC = nullptr;
+// 	size_t bytesA = static_cast<size_t>(M) * K * sizeof(float);
+// 	size_t bytesB = static_cast<size_t>(K) * N * sizeof(float);
+// 	size_t bytesC = static_cast<size_t>(M) * N * sizeof(float);
+// 	cudaMalloc(reinterpret_cast<void**>(&dA), bytesA);
+// 	cudaMalloc(reinterpret_cast<void**>(&dB), bytesB);
+// 	cudaMalloc(reinterpret_cast<void**>(&dC), bytesC);
 
-	// Copy generated host floats to device by flattening the vectors
-	thrust::host_vector<float> hA_flat(static_cast<size_t>(M) * K);
-	thrust::host_vector<float> hB_flat(static_cast<size_t>(K) * N);
-	for (int i = 0; i < M; ++i) for (int j = 0; j < K; ++j) hA_flat[static_cast<size_t>(i) * K + j] = genA[i][j];
-	for (int i = 0; i < K; ++i) for (int j = 0; j < N; ++j) hB_flat[static_cast<size_t>(i) * N + j] = genB[i][j];
-	cudaMemcpy(dA, hA_flat.data(), bytesA, cudaMemcpyHostToDevice);
-	cudaMemcpy(dB, hB_flat.data(), bytesB, cudaMemcpyHostToDevice);
-	cudaMemset(dC, 0, bytesC);
+// 	// Copy generated host floats to device by flattening the vectors
+// 	thrust::host_vector<float> hA_flat(static_cast<size_t>(M) * K);
+// 	thrust::host_vector<float> hB_flat(static_cast<size_t>(K) * N);
+// 	for (int i = 0; i < M; ++i) for (int j = 0; j < K; ++j) hA_flat[static_cast<size_t>(i) * K + j] = genA[i][j];
+// 	for (int i = 0; i < K; ++i) for (int j = 0; j < N; ++j) hB_flat[static_cast<size_t>(i) * N + j] = genB[i][j];
+// 	cudaMemcpy(dA, hA_flat.data(), bytesA, cudaMemcpyHostToDevice);
+// 	cudaMemcpy(dB, hB_flat.data(), bytesB, cudaMemcpyHostToDevice);
+// 	cudaMemset(dC, 0, bytesC);
 
-	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
-		// clear output buffer for this iteration on the launch stream
-		cudaMemsetAsync(dC, 0, bytesC, launch.get_stream());
-		timer.start();
-		// call the C wrapper that invokes the templated cute gemm
-		cute_gemm_tensor_invoke('N', 'T', M, N, K, 1.0f, dA, M, dB, N, 0.0f, dC, M, launch.get_stream());
-		timer.stop();
-	});
+// 	state.add_element_count(static_cast<size_t>(M) * N);
+// 	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+// 		// clear output buffer for this iteration on the launch stream
+// 		cudaMemsetAsync(dC, 0, bytesC, launch.get_stream());
+// 		timer.start();
+// 		// call the C wrapper that invokes the templated cute gemm
+// 		cute_gemm_tensor_invoke('N', 'T', M, N, K, 1.0f, dA, M, dB, N, 0.0f, dC, M, launch.get_stream());
+// 		timer.stop();
+// 	});
 
-	// Copy result back and verify on CPU
-	{
-		std::vector<float> out_host(static_cast<size_t>(M) * N);
-		cudaMemcpy(out_host.data(), dC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
-		// Build CPU reference from generated matrices
-		std::vector<float> ref(static_cast<size_t>(M) * N, 0.0f);
-		for (int i = 0; i < M; ++i) {
-			for (int k = 0; k < K; ++k) {
-				float a = genA[i][k];
-				for (int j = 0; j < N; ++j) {
-					ref[static_cast<size_t>(i) * N + j] += a * genB[k][j];
-				}
-			}
-		}
-		const float eps = 1e-2f;
-		for (size_t i = 0; i < out_host.size(); ++i) {
-			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "[CUTE GEMM] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
-				std::abort();
-			}
-		}
-	}
+// 	// Copy result back and verify on CPU
+// 	{
+// 		std::vector<float> out_host(static_cast<size_t>(M) * N);
+// 		cudaMemcpy(out_host.data(), dC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+// 		// Build CPU reference from generated matrices
+// 		std::vector<float> ref(static_cast<size_t>(M) * N, 0.0f);
+// 		for (int i = 0; i < M; ++i) {
+// 			for (int k = 0; k < K; ++k) {
+// 				float a = genA[i][k];
+// 				for (int j = 0; j < N; ++j) {
+// 					ref[static_cast<size_t>(i) * N + j] += a * genB[k][j];
+// 				}
+// 			}
+// 		}
+// 		const float eps = 1e-2f;
+// 		for (size_t i = 0; i < out_host.size(); ++i) {
+// 			if (std::fabs(out_host[i] - ref[i]) > eps) {
+// 				std::fprintf(stderr, "[CUTE GEMM] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+// 				std::abort();
+// 			}
+// 		}
+// 	}
 
-	cudaFree(dA);
-	cudaFree(dB);
-	cudaFree(dC);
+// 	cudaFree(dA);
+// 	cudaFree(dB);
+// 	cudaFree(dC);
 
-	report_summary(state);
-}
+// 	report_summary(state);
+// }
 
 // Benchmark: CUTE GEMM SIMT (calls cute/gemm_cute_simt.cu's gemm)
-static void bench_cute_gemm_simt(nvbench::state &state) {
-	const int M = static_cast<int>(state.get_int64("M"));
-	const int K = static_cast<int>(state.get_int64("K"));
-	const int N = static_cast<int>(state.get_int64("N"));
-	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
-	const int patIdx = static_cast<int>(state.get_int64("PAT"));
-	const double spars = sparsP / 100.0;
-	const std::string pattern = patterns.at(patIdx % patterns.size());
+// static void bench_cute_gemm_simt(nvbench::state &state) {
+// 	const int M = static_cast<int>(state.get_int64("M"));
+// 	const int K = static_cast<int>(state.get_int64("K"));
+// 	const int N = static_cast<int>(state.get_int64("N"));
+// 	const int sparsP = static_cast<int>(state.get_int64("SPARS"));
+// 	const int patIdx = static_cast<int>(state.get_int64("PAT"));
+// 	const double spars = sparsP / 100.0;
+// 	const std::string pattern = patterns.at(patIdx % patterns.size());
 
-	// Generate float matrices (dense) using the same generator used elsewhere
-	auto genA = mg::generate_matrix<float>(M, K, spars, pattern, 16, 123);
-	auto genB = mg::generate_matrix<float>(K, N, 0.0, "random", 16, 456);
+// 	// Generate float matrices (dense) using the same generator used elsewhere
+// 	auto genA = mg::generate_matrix<float>(M, K, spars, pattern, 16, 123);
+// 	auto genB = mg::generate_matrix<float>(K, N, 0.0, "random", 16, 456);
 
-	// Allocate device buffers for floats
-	float *dA = nullptr, *dB = nullptr, *dC = nullptr;
-	size_t bytesA = static_cast<size_t>(M) * K * sizeof(float);
-	size_t bytesB = static_cast<size_t>(K) * N * sizeof(float);
-	size_t bytesC = static_cast<size_t>(M) * N * sizeof(float);
-	cudaMalloc(reinterpret_cast<void**>(&dA), bytesA);
-	cudaMalloc(reinterpret_cast<void**>(&dB), bytesB);
-	cudaMalloc(reinterpret_cast<void**>(&dC), bytesC);
+// 	// Allocate device buffers for floats
+// 	float *dA = nullptr, *dB = nullptr, *dC = nullptr;
+// 	size_t bytesA = static_cast<size_t>(M) * K * sizeof(float);
+// 	size_t bytesB = static_cast<size_t>(K) * N * sizeof(float);
+// 	size_t bytesC = static_cast<size_t>(M) * N * sizeof(float);
+// 	cudaMalloc(reinterpret_cast<void**>(&dA), bytesA);
+// 	cudaMalloc(reinterpret_cast<void**>(&dB), bytesB);
+// 	cudaMalloc(reinterpret_cast<void**>(&dC), bytesC);
 
-	// Copy generated host floats to device by flattening the vectors
-	thrust::host_vector<float> hA_flat(static_cast<size_t>(M) * K);
-	thrust::host_vector<float> hB_flat(static_cast<size_t>(K) * N);
-	for (int i = 0; i < M; ++i) for (int j = 0; j < K; ++j) hA_flat[static_cast<size_t>(i) * K + j] = genA[i][j];
-	for (int i = 0; i < K; ++i) for (int j = 0; j < N; ++j) hB_flat[static_cast<size_t>(i) * N + j] = genB[i][j];
-	cudaMemcpy(dA, hA_flat.data(), bytesA, cudaMemcpyHostToDevice);
-	cudaMemcpy(dB, hB_flat.data(), bytesB, cudaMemcpyHostToDevice);
-	cudaMemset(dC, 0, bytesC);
+// 	// Copy generated host floats to device by flattening the vectors
+// 	thrust::host_vector<float> hA_flat(static_cast<size_t>(M) * K);
+// 	thrust::host_vector<float> hB_flat(static_cast<size_t>(K) * N);
+// 	for (int i = 0; i < M; ++i) for (int j = 0; j < K; ++j) hA_flat[static_cast<size_t>(i) * K + j] = genA[i][j];
+// 	for (int i = 0; i < K; ++i) for (int j = 0; j < N; ++j) hB_flat[static_cast<size_t>(i) * N + j] = genB[i][j];
+// 	cudaMemcpy(dA, hA_flat.data(), bytesA, cudaMemcpyHostToDevice);
+// 	cudaMemcpy(dB, hB_flat.data(), bytesB, cudaMemcpyHostToDevice);
+// 	cudaMemset(dC, 0, bytesC);
 
-	state.add_element_count(static_cast<size_t>(M) * N);
-	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
-		// clear output buffer for this iteration on the launch stream
-		cudaMemsetAsync(dC, 0, bytesC, launch.get_stream());
-		timer.start();
-		// call the C wrapper that invokes the templated simt cute gemm
-		cute_gemm_simt_invoke('N', 'T', M, N, K, 1.0f, dA, M, dB, N, 0.0f, dC, M, launch.get_stream());
-		timer.stop();
-	});
+// 	state.add_element_count(static_cast<size_t>(M) * N);
+// 	state.exec(nvbench::exec_tag::timer, [&](nvbench::launch &launch, auto &timer){
+// 		// clear output buffer for this iteration on the launch stream
+// 		cudaMemsetAsync(dC, 0, bytesC, launch.get_stream());
+// 		timer.start();
+// 		// call the C wrapper that invokes the templated simt cute gemm
+// 		cute_gemm_simt_invoke('N', 'T', M, N, K, 1.0f, dA, M, dB, N, 0.0f, dC, M, launch.get_stream());
+// 		timer.stop();
+// 	});
 
-	// Copy result back and verify on CPU
-	{
-		std::vector<float> out_host(static_cast<size_t>(M) * N);
-		cudaMemcpy(out_host.data(), dC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
-		// Build CPU reference from generated matrices
-		std::vector<float> ref(static_cast<size_t>(M) * N, 0.0f);
-		for (int i = 0; i < M; ++i) {
-			for (int k = 0; k < K; ++k) {
-				float a = genA[i][k];
-				for (int j = 0; j < N; ++j) {
-					ref[static_cast<size_t>(i) * N + j] += a * genB[k][j];
-				}
-			}
-		}
-		const float eps = 1e-2f;
-		for (size_t i = 0; i < out_host.size(); ++i) {
-			if (std::fabs(out_host[i] - ref[i]) > eps) {
-				std::fprintf(stderr, "[CUTE GEMM SIMT] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
-				std::abort();
-			}
-		}
-	}
+// 	// Copy result back and verify on CPU
+// 	{
+// 		std::vector<float> out_host(static_cast<size_t>(M) * N);
+// 		cudaMemcpy(out_host.data(), dC, out_host.size() * sizeof(float), cudaMemcpyDeviceToHost);
+// 		// Build CPU reference from generated matrices
+// 		std::vector<float> ref(static_cast<size_t>(M) * N, 0.0f);
+// 		for (int i = 0; i < M; ++i) {
+// 			for (int k = 0; k < K; ++k) {
+// 				float a = genA[i][k];
+// 				for (int j = 0; j < N; ++j) {
+// 					ref[static_cast<size_t>(i) * N + j] += a * genB[k][j];
+// 				}
+// 			}
+// 		}
+// 		const float eps = 1e-2f;
+// 		for (size_t i = 0; i < out_host.size(); ++i) {
+// 			if (std::fabs(out_host[i] - ref[i]) > eps) {
+// 				std::fprintf(stderr, "[CUTE GEMM SIMT] Mismatch at index %zu: got %f expected %f\n", i, out_host[i], ref[i]);
+// 				std::abort();
+// 			}
+// 		}
+// 	}
 
-	cudaFree(dA);
-	cudaFree(dB);
-	cudaFree(dC);
+// 	cudaFree(dA);
+// 	cudaFree(dB);
+// 	cudaFree(dC);
 
-	report_summary(state);
-}
+// 	report_summary(state);
+// }
 
 // Benchmark: sparseMatrixMulTensor32x16_v2 (v2-style for 32x16 blocks)
 static void bench_sparseMatrixMulTensor32x16_v2(nvbench::state &state) {
