@@ -65,10 +65,10 @@ CPMAddPackage("gh:NVIDIA/nvbench#main")
 
 add_executable(matrix_multiplication_nvbench
     nvbench_main.cu
-    cute_test/gemm_cute_tensor.cu
-    cute_test/gemm_cute_simt.cu
-    cute_test/gemm_cute_tensor.cuh
-    cute_test/gemm_cute_simt.cuh
+    # cute_test/gemm_cute_tensor.cu
+    # cute_test/gemm_cute_simt.cu
+    # cute_test/gemm_cute_tensor.cuh
+    # cute_test/gemm_cute_simt.cuh
     Matrix.cuh
     Matrix.cu
     formats/CSRMatrix.cu
