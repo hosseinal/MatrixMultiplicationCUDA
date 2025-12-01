@@ -98,15 +98,15 @@ if(DEFINED NVBENCH_INCLUDE_DIR)
 endif()
 
 # Expose local CUTE/CUTLASS headers (required)
-target_include_directories(matrix_multiplication_nvbench PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/cute
-    ${CMAKE_CURRENT_SOURCE_DIR}/cutlass
-)
-target_compile_definitions(matrix_multiplication_nvbench PRIVATE HAVE_CUTE)
+# target_include_directories(matrix_multiplication_nvbench PRIVATE
+#     ${CMAKE_CURRENT_SOURCE_DIR}
+#     ${CMAKE_CURRENT_SOURCE_DIR}/cute
+#     ${CMAKE_CURRENT_SOURCE_DIR}/cutlass
+# )
+# target_compile_definitions(matrix_multiplication_nvbench PRIVATE HAVE_CUTE)
 
-# Ensure POSIX semaphore symbols are visible and compile with pthreads
-target_compile_definitions(matrix_multiplication_nvbench PRIVATE _POSIX_C_SOURCE=200809L)
+# # Ensure POSIX semaphore symbols are visible and compile with pthreads
+# target_compile_definitions(matrix_multiplication_nvbench PRIVATE _POSIX_C_SOURCE=200809L)
 
 # Keep these manual flags; they ensure -pthread is passed to the host compiler via nvcc
 target_compile_options(matrix_multiplication_nvbench PRIVATE

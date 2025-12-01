@@ -33,10 +33,10 @@
 #include "formats/CSRMatrix.cuh"
 #include "formats/BCSRMatrix.cuh"
 
-// CUTE GEMM wrapper prototypes
-#include "cute_test/gemm_cute_tensor.cuh"
-#include "cute_test/gemm_cute_simt.cuh"
-#include "cutlass/semaphore.h"
+// // CUTE GEMM wrapper prototypes
+// #include "cute_test/gemm_cute_tensor.cuh"
+// #include "cute_test/gemm_cute_simt.cuh"
+// #include "cutlass/semaphore.h"
 
 
 
@@ -1423,8 +1423,8 @@ NVBENCH_BENCH(bench_sparseMatrixMulTensorAdaptive).set_name("sparseMatrixMulTens
 NVBENCH_BENCH(bench_sparseMatrixMulTensorAdaptive32x16).set_name("sparseMatrixMulTensorAdaptive_32x16").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {6});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16_shared_vectorized).set_name("sparseMatrixMulTensor32x16_shared_vectorized").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {6});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16_v2_shared_vectorized).set_name("sparseMatrixMulTensor32x16_v2_shared_vectorized").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {6});
-NVBENCH_BENCH(bench_cute_gemm_tensor).set_name("cute_gemm_tensor").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {5});
-NVBENCH_BENCH(bench_cute_gemm_simt).set_name("cute_gemm_simt").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {5});
+// NVBENCH_BENCH(bench_cute_gemm_tensor).set_name("cute_gemm_tensor").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {5});
+// NVBENCH_BENCH(bench_cute_gemm_simt).set_name("cute_gemm_simt").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {1024}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 65, 70, 75, 80, 85, 90}).add_int64_axis("PAT", {5});
 
 // size 512 512 for same methods
 NVBENCH_BENCH(bench_cuBLAS_Tensor).set_name("cuBLAS_GEMM_TENSOR").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
@@ -1435,8 +1435,8 @@ NVBENCH_BENCH(bench_sparseMatrixMulTensorAdaptive).set_name("sparseMatrixMulTens
 NVBENCH_BENCH(bench_sparseMatrixMulTensorAdaptive32x16).set_name("sparseMatrixMulTensorAdaptive_32x16").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis	("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16_shared_vectorized).set_name("sparseMatrixMulTensor32x16_shared_vectorized").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16_v2_shared_vectorized).set_name("sparseMatrixMulTensor32x16_v2_shared_vectorized").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
-NVBENCH_BENCH(bench_cute_gemm_tensor).set_name("cute_gemm_tensor").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
-NVBENCH_BENCH(bench_cute_gemm_simt).set_name("cute_gemm_simt").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
+// NVBENCH_BENCH(bench_cute_gemm_tensor).set_name("cute_gemm_tensor").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
+// NVBENCH_BENCH(bench_cute_gemm_simt).set_name("cute_gemm_simt").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {512}).add_int64_axis("K", {512}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
 
 
 // size 2048 256 for same methods
@@ -1448,5 +1448,5 @@ NVBENCH_BENCH(bench_sparseMatrixMulTensorAdaptive).set_name("sparseMatrixMulTens
 NVBENCH_BENCH(bench_sparseMatrixMulTensorAdaptive32x16).set_name("sparseMatrixMulTensorAdaptive_32x16").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {2048}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16_shared_vectorized).set_name("sparseMatrixMulTensor32x16_shared_vectorized").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {2048}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
 NVBENCH_BENCH(bench_sparseMatrixMulTensor32x16_v2_shared_vectorized).set_name("sparseMatrixMulTensor32x16_v2_shared_vectorized").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {2048}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
-NVBENCH_BENCH(bench_cute_gemm_tensor).set_name("cute_gemm_tensor").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {2048}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
-NVBENCH_BENCH(bench_cute_gemm_simt).set_name("cute_gemm_simt").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {2048}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
+// NVBENCH_BENCH(bench_cute_gemm_tensor).set_name("cute_gemm_tensor").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {2048}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
+// NVBENCH_BENCH(bench_cute_gemm_simt).set_name("cute_gemm_simt").add_int64_axis("N", {32, 64, 128}).add_int64_axis("M", {2048}).add_int64_axis("K", {256}).add_int64_axis("SPARS", {60, 70, 80, 90}).add_int64_axis("PAT", {0,1,2,3,4,5,6});
