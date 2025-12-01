@@ -32,7 +32,6 @@
 #include "Matrix.cuh"
 #include "formats/CSRMatrix.cuh"
 #include "formats/BCSRMatrix.cuh"
-
 #include "block_size.h"
 
 // // CUTE GEMM wrapper prototypes
