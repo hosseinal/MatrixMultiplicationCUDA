@@ -33,6 +33,8 @@
 #include "formats/CSRMatrix.cuh"
 #include "formats/BCSRMatrix.cuh"
 
+#include "block_size.h"
+
 // // CUTE GEMM wrapper prototypes
 // #include "cute_test/gemm_cute_tensor.cuh"
 // #include "cute_test/gemm_cute_simt.cuh"
@@ -50,9 +52,7 @@ using namespace nvcuda;
 // Local constant to match main.cu's thread configuration
 constexpr unsigned int N_THREADS = 32;
 
-// Provide BLOCK_SIZE for this TU. Keep internal linkage to avoid ODR violations
-// when building multiple translation units that may also define BLOCK_SIZE.
-static const int BLOCK_SIZE = 16;
+// Use project-wide BLOCK_SIZE from `block_size.h`.
 
 static const std::vector<std::string> patterns = {
 	"random",

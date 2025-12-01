@@ -5,8 +5,7 @@
 #include "HCSRMatrix.h"
 
 #include "../miscutil.h"
-
-extern const int BLOCK_SIZE;
+#include "../block_size.h"
 
 HCSRMatrix::HCSRMatrix(const Matrix &matrix, float threshold) {
     const auto *matrix1 = new Matrix(matrix.rows, matrix.cols);
